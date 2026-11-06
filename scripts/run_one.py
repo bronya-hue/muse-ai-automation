@@ -1,10 +1,16 @@
 """Single-account end-to-end runner with live streamed output."""
 import os
+import signal
 import sys
 import time
 import subprocess
 import urllib.request
 from pathlib import Path
+
+try:
+    os.kill(browser_proc.pid, signal.SIGKILL)
+except Exception:
+    pass
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
