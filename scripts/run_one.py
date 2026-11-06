@@ -1,108 +1,92 @@
-"""Single-account end-to-end runner with live streamed output."""
 import os
 import signal
-import sys
+import random
+import string
+import re
 import time
-import subprocess
-import urllib.request
-from pathlib import Path
+import httpx
+from playwright.sync_api import sync_playwright
 
-try:
-    os.kill(browser_proc.pid, signal.SIGKILL)
-except Exception:
-    pass
+# Mail.tm helper
+def get_temp_email():
+    with httpx.Client() as client:
+        r = client.get("https://api.mail.tm/domains")
+        domain = r.json()['hydra:member'][0]['domain']
+        local = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
+        address = f"{local}@{domain}"
+        password = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+        
+        client.post("https://api.mail.tm/accounts", json={"address": address, "password": password})
+        r = client.post("https://api.mail.tm/token", json={"address": address, "password": password})
+        return address, r.json()['token']
 
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+def get_otp(token):
+    with httpx.Client() as client:
+        for _ in range(30):
+            r = client.get("https://api.mail.tm/messages", headers={"Authorization": f"Bearer {token}"})
+            msgs = r.json()['hydra:member']
+            if msgs:
+                msg_id = msgs[0]['id']
+                msg = client.get(f"https://api.mail.tm/messages/{msg_id}", headers={"Authorization": f"Bearer {token}"}).json()
+                text = msg.get('text', '') + " ".join(msg.get('html', []))
+                match = re.search(r'\b(\d{6})\b', text)
+                if match:
+                    return match.group(1)
+            time.sleep(3)
+    raise Exception("OTP tidak ditemukan")
 
-ROOT = Path(__file__).resolve().parent.parent
-SCRIPTS = ROOT / "scripts"
-sys.path.insert(0, str(SCRIPTS))
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv(str(ROOT / ".env"))
-except ImportError:
-    pass
-
-
-def log(msg: str):
-    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
-
-
-def cdp_ready(port: int, timeout: int = 30) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=2) as r:
-                if r.status == 200:
-                    return True
-        except Exception:
-            time.sleep(0.5)
-    return False
-
-
-def run_one(headless: bool = True):
-    import secrets
-    import random
-    port = 9222
+def run_one(headless=True):
+    # 1. Setup environment
     env = dict(os.environ)
-    env["CDP_URL"] = f"http://127.0.0.1:{port}"
-    env["CDP_PORT"] = str(port)
-    env["PROFILE_NAME"] = f"muse_{secrets.token_hex(4)}"
-    env["FINGERPRINT"] = str(random.randint(100000, 999999))
-    env["HEADLESS"] = "1" if headless else "0"
-
-    launch_js = SCRIPTS / "launch_profile.js"
-    log(f"Launching CloakBrowser on port {port}...")
-
-    browser_proc = subprocess.Popen(
-        ["node", str(launch_js)],
-        cwd=str(ROOT),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-
-    try:
-        log("Waiting for browser CDP endpoint...")
-        if not cdp_ready(port, timeout=40):
-            log("Browser CDP endpoint timed out!")
-            return False
-
-        log("CDP ready! Starting muse_bot.py --one...")
-        bot_py = SCRIPTS / "muse_bot.py"
-        bot_proc = subprocess.Popen(
-            [sys.executable, "-u", str(bot_py), "--one"],
-            cwd=str(ROOT),
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+    proxy_url = env.get("PROXY_URL")
+    invite_code = env.get("INVITE_CODE")
+    
+    email, token = get_temp_email()
+    print(f"[*] Menggunakan email: {email}")
+    
+    # 2. Launch Browser
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=headless,
+            proxy={"server": proxy_url} if proxy_url else None,
+            args=["--no-sandbox", "--disable-dev-shm-usage"]
         )
-
-        for line in bot_proc.stdout:
-            print(line, end="", flush=True)
-
-        bot_proc.wait()
-        log(f"muse_bot exited with return code {bot_proc.returncode}")
-        return bot_proc.returncode == 0
-    finally:
-        log("Cleaning up browser process...")
-        import os
-import signal
-try:
-    os.kill(browser_proc.pid, signal.SIGKILL)
-except Exception:
-    pass
-
+        context = browser.new_context()
+        page = context.new_page()
+        
+        try:
+            print("[*] Membuka halaman Muse.ai...")
+            page.goto("https://muse.ai/join", wait_until="domcontentloaded")
+            time.sleep(3)
+            
+            # ... (Muse.ai specific selectors)
+            page.fill('input[type="email"]', email)
+            page.click('button[type="submit"]')
+            time.sleep(5)
+            
+            print("[*] Menunggu OTP...")
+            otp = get_otp(token)
+            print(f"[+] OTP didapat: {otp}")
+            
+            page.fill('input[type="text"]', otp)
+            page.click('button[type="submit"]')
+            time.sleep(10)
+            
+            # Apply referral
+            if invite_code:
+                print("[*] Menerapkan kode referral...")
+                page.goto("https://muse.ai/settings", wait_until="domcontentloaded")
+                time.sleep(3)
+                # ... logic
+            
+            # Save account
+            with open("accounts.txt", "a") as f:
+                f.write(f"{email}:{otp}\n")
+                
+        except Exception as e:
+            print(f"[-] Error: {e}")
+        finally:
+            browser.close() # This is the safe way
+            
 if __name__ == "__main__":
-    headless_mode = "--headed" not in sys.argv
-    run_one(headless=headless_mode)
+    run_one(headless=True)
