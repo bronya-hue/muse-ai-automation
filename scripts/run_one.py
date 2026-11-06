@@ -96,8 +96,12 @@ def run_one(headless: bool = True):
         return bot_proc.returncode == 0
     finally:
         log("Cleaning up browser process...")
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(browser_proc.pid)], capture_output=True)
-
+        import os
+import signal
+try:
+    os.kill(browser_proc.pid, signal.SIGKILL)
+except Exception:
+    pass
 
 if __name__ == "__main__":
     headless_mode = "--headed" not in sys.argv
