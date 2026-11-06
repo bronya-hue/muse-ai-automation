@@ -42,4 +42,4 @@ COPY . .
 
 # 9. Tentukan perintah default (bisa dioverride di Railway)
 # Contoh: Menjalankan satu akun secara otomatis
-CMD ["python", "scripts/run_one.py"]
+CMD ["python", "telegram_bot.py"]
