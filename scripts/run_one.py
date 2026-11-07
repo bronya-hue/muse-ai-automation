@@ -1,5 +1,4 @@
 import os
-import signal
 import random
 import string
 import re
@@ -7,86 +6,122 @@ import time
 import httpx
 from playwright.sync_api import sync_playwright
 
-# Mail.tm helper
+# --- FUNGSI EMAIL SEMENTARA (Mail.tm) ---
 def get_temp_email():
     with httpx.Client() as client:
-        r = client.get("https://api.mail.tm/domains")
-        domain = r.json()['hydra:member'][0]['domain']
-        local = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
+        try:
+            r = client.get("https://api.mail.tm/domains", timeout=10)
+            domain = r.json()['hydra:member'][0]['domain']
+        except Exception:
+            domain = "mail.tm"
+            
+        local = ''.join(random.choices(string.ascii_lowercase + string.digits, k=12))
         address = f"{local}@{domain}"
         password = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
         
-        client.post("https://api.mail.tm/accounts", json={"address": address, "password": password})
-        r = client.post("https://api.mail.tm/token", json={"address": address, "password": password})
+        client.post("https://api.mail.tm/accounts", json={"address": address, "password": password}, timeout=10)
+        r = client.post("https://api.mail.tm/token", json={"address": address, "password": password}, timeout=10)
         return address, r.json()['token']
 
-def get_otp(token):
+def get_otp(token, timeout=120):
     with httpx.Client() as client:
-        for _ in range(30):
-            r = client.get("https://api.mail.tm/messages", headers={"Authorization": f"Bearer {token}"})
-            msgs = r.json()['hydra:member']
-            if msgs:
-                msg_id = msgs[0]['id']
-                msg = client.get(f"https://api.mail.tm/messages/{msg_id}", headers={"Authorization": f"Bearer {token}"}).json()
-                text = msg.get('text', '') + " ".join(msg.get('html', []))
-                match = re.search(r'\b(\d{6})\b', text)
-                if match:
-                    return match.group(1)
-            time.sleep(3)
-    raise Exception("OTP tidak ditemukan")
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                r = client.get("https://api.mail.tm/messages", headers={"Authorization": f"Bearer {token}"}, timeout=10)
+                msgs = r.json()['hydra:member']
+                if msgs:
+                    msg_id = msgs[0]['id']
+                    msg = client.get(f"https://api.mail.tm/messages/{msg_id}", headers={"Authorization": f"Bearer {token}"}, timeout=10).json()
+                    text = msg.get('text', '') + " ".join(msg.get('html', []))
+                    match = re.search(r'\b(\d{6})\b', text)
+                    if match:
+                        return match.group(1)
+            except Exception:
+                pass
+            time.sleep(4)
+        raise Exception("OTP tidak ditemukan dalam batas waktu")
 
+# --- FUNGSI UTAMA FARMING MUSE.AI ---
 def run_one(headless=True):
-    # 1. Setup environment
-    env = dict(os.environ)
-    proxy_url = env.get("PROXY_URL")
-    invite_code = env.get("INVITE_CODE")
+    proxy_url = os.getenv("PROXY_URL")
+    invite_code = os.getenv("INVITE_CODE")
     
-    email, token = get_temp_email()
-    print(f"[*] Menggunakan email: {email}")
+    # Cek apakah proxy benar-benar jalan (Opsional)
+    if proxy_url:
+        print(f"[*] Mengetes koneksi Proxy...")
+        try:
+            with httpx.Client(proxy=proxy_url, timeout=15) as client:
+                ip_check = client.get("https://api.ipify.org?format=json")
+                print(f"[+] Proxy Terhubung! IP Keluar: {ip_check.json()['ip']}")
+        except Exception as e:
+            print(f"[-] Peringatan: Proxy gagal terhubung atau lambat. ({e})")
+
+    email_address, email_token = get_temp_email()
+    print(f"[*] Menggunakan email: {email_address}")
     
-    # 2. Launch Browser
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=headless,
             proxy={"server": proxy_url} if proxy_url else None,
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--ignore-certificate-errors"]
         )
-        context = browser.new_context()
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            ignore_https_errors=True
+        )
         page = context.new_page()
+        page.set_default_timeout(90000) # Naikkan timeout jadi 90 detik
         
         try:
             print("[*] Membuka halaman Muse.ai...")
-            page.goto("https://muse.ai/join", wait_until="domcontentloaded")
-            time.sleep(3)
+            # Menggunakan "commit" agar tidak menunggu gambar/iklan selesai dimuat
+            page.goto("https://muse.ai/join", wait_until="commit", timeout=90000)
+            print("[*] Halaman terhubung. Menunggu React/Cloudflare selesai...")
+            time.sleep(10) # Tunggu 10 detik agar Cloudflare lolos
             
-            # ... (Muse.ai specific selectors)
-            page.fill('input[type="email"]', email)
-            page.click('button[type="submit"]')
+            # Cek apakah form email benar-benar muncul
+            email_input = page.locator('input[type="email"]').first
+            if not email_input.is_visible():
+                raise Exception("Form email tidak muncul. Kemungkinan diblokir Cloudflare (IP Proxy buruk).")
+            
+            print("[*] Form email ditemukan. Mengisi email...")
+            email_input.fill(email_address)
+            page.locator('button[type="submit"]').first.click()
+            
+            print("[*] Menunggu OTP dari email...")
             time.sleep(5)
+            otp = get_otp(email_token)
+            print(f"[+] OTP diterima: {otp}")
             
-            print("[*] Menunggu OTP...")
-            otp = get_otp(token)
-            print(f"[+] OTP didapat: {otp}")
+            page.locator('input[type="text"]').first.fill(otp)
+            page.locator('button[type="submit"]').first.click()
             
-            page.fill('input[type="text"]', otp)
-            page.click('button[type="submit"]')
+            print("[*] Menunggu verifikasi akun...")
             time.sleep(10)
             
-            # Apply referral
             if invite_code:
-                print("[*] Menerapkan kode referral...")
-                page.goto("https://muse.ai/settings", wait_until="domcontentloaded")
-                time.sleep(3)
-                # ... logic
+                print(f"[*] Menerapkan kode referral: {invite_code}")
+                try:
+                    page.goto("https://muse.ai/settings", wait_until="domcontentloaded")
+                    time.sleep(5)
+                    ref_input = page.locator('input[placeholder*="invite" i], input[placeholder*="referral" i]').first
+                    if ref_input.is_visible():
+                        ref_input.fill(invite_code)
+                        page.locator('button:has-text("Redeem"), button:has-text("Apply")').first.click()
+                        time.sleep(5)
+                except Exception as e:
+                    print(f"[-] Gagal memasukkan referral: {e}")
             
-            # Save account
-            with open("accounts.txt", "a") as f:
-                f.write(f"{email}:{otp}\n")
-                
+            print(f"[+] SUKSES! Akun {email_address} berhasil dibuat.")
+            return True
+
         except Exception as e:
             print(f"[-] Error: {e}")
+            page.screenshot(path=f"/tmp/muse_fail_{email_address}.png")
+            return False
         finally:
-            browser.close() # This is the safe way
-            
+            browser.close()
+
 if __name__ == "__main__":
     run_one(headless=True)
