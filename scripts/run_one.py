@@ -47,7 +47,6 @@ def run_one(headless=True):
     proxy_url = os.getenv("PROXY_URL")
     invite_code = os.getenv("INVITE_CODE")
     
-    # Cek apakah proxy benar-benar jalan (Opsional)
     if proxy_url:
         print(f"[*] Mengetes koneksi Proxy...")
         try:
@@ -71,16 +70,14 @@ def run_one(headless=True):
             ignore_https_errors=True
         )
         page = context.new_page()
-        page.set_default_timeout(90000) # Naikkan timeout jadi 90 detik
+        page.set_default_timeout(90000) 
         
         try:
             print("[*] Membuka halaman Muse.ai...")
-            # Menggunakan "commit" agar tidak menunggu gambar/iklan selesai dimuat
             page.goto("https://muse.ai/join", wait_until="commit", timeout=90000)
             print("[*] Halaman terhubung. Menunggu React/Cloudflare selesai...")
-            time.sleep(10) # Tunggu 10 detik agar Cloudflare lolos
+            time.sleep(10)
             
-            # Cek apakah form email benar-benar muncul
             email_input = page.locator('input[type="email"]').first
             if not email_input.is_visible():
                 raise Exception("Form email tidak muncul. Kemungkinan diblokir Cloudflare (IP Proxy buruk).")
@@ -103,7 +100,7 @@ def run_one(headless=True):
             if invite_code:
                 print(f"[*] Menerapkan kode referral: {invite_code}")
                 try:
-                    page.goto("https://muse.ai/settings", wait_until="domcontentloaded")
+                    page.goto("https://muse.ai/settings", wait_until="domcontentloaded", timeout=60000)
                     time.sleep(5)
                     ref_input = page.locator('input[placeholder*="invite" i], input[placeholder*="referral" i]').first
                     if ref_input.is_visible():
@@ -117,8 +114,16 @@ def run_one(headless=True):
             return True
 
         except Exception as e:
-            print(f"[-] Error: {e}")
-            page.screenshot(path=f"/tmp/muse_fail_{email_address}.png")
+            # 1. CETAK ERROR ASLINYA DULU
+            print(f"[-] Error Utama: {e}")
+            
+            # 2. Screenshot dengan batas waktu sangat pendek (5 detik saja)
+            try:
+                page.screenshot(path=f"/tmp/muse_fail_{email_address}.png", timeout=5000)
+                print("[*] Screenshot error berhasil disimpan.")
+            except Exception as ss_err:
+                print(f"[-] Gagal mengambil screenshot (Browser hang): {ss_err}")
+                
             return False
         finally:
             browser.close()
