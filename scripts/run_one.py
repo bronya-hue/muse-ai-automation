@@ -4,45 +4,69 @@ import string
 import re
 import time
 import httpx
-from playwright.sync_api import sync_playwright
+from patchright.sync_api import sync_playwright # Ganti import
 
-# --- FUNGSI EMAIL SEMENTARA (Mail.tm) ---
-def get_temp_email():
+# --- FUNGSI EMAIL GACORMAIL ---
+def get_gacormail():
+    # Catatan: Gacormail tidak memiliki API publik resmi.
+    # Kita menggunakan endpoint internal yang biasanya dipakai frontend.
+    # Jika gagal, fallback ke Mail.tm.
     with httpx.Client() as client:
+        try:
+            # 1. Buat inbox baru
+            r = client.post("https://www.gacormail.me/api/v1/inbox", timeout=15)
+            data = r.json()
+            email_address = data.get("address")
+            token = data.get("token") # Atau sesuaikan dengan response API mereka
+            
+            if email_address and token:
+                print(f"[+] Berhasil membuat email Gacormail: {email_address}")
+                return email_address, token, "gacormail"
+        except Exception as e:
+            print(f"[-] Gacormail gagal: {e}. Fallback ke Mail.tm...")
+        
+        # Fallback ke Mail.tm jika Gacormail error
         try:
             r = client.get("https://api.mail.tm/domains", timeout=10)
             domain = r.json()['hydra:member'][0]['domain']
-        except Exception:
-            domain = "mail.tm"
-            
-        local = ''.join(random.choices(string.ascii_lowercase + string.digits, k=12))
-        address = f"{local}@{domain}"
-        password = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
-        
-        client.post("https://api.mail.tm/accounts", json={"address": address, "password": password}, timeout=10)
-        r = client.post("https://api.mail.tm/token", json={"address": address, "password": password}, timeout=10)
-        return address, r.json()['token']
+            local = ''.join(random.choices(string.ascii_lowercase + string.digits, k=12))
+            address = f"{local}@{domain}"
+            password = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+            client.post("https://api.mail.tm/accounts", json={"address": address, "password": password}, timeout=10)
+            r = client.post("https://api.mail.tm/token", json={"address": address, "password": password}, timeout=10)
+            return address, r.json()['token'], "mailtm"
+        except Exception as e:
+            raise Exception(f"Semua provider email gagal: {e}")
 
-def get_otp(token, timeout=120):
+def get_otp(provider, token, timeout=120):
     with httpx.Client() as client:
         start = time.time()
         while time.time() - start < timeout:
             try:
-                r = client.get("https://api.mail.tm/messages", headers={"Authorization": f"Bearer {token}"}, timeout=10)
-                msgs = r.json()['hydra:member']
-                if msgs:
-                    msg_id = msgs[0]['id']
-                    msg = client.get(f"https://api.mail.tm/messages/{msg_id}", headers={"Authorization": f"Bearer {token}"}, timeout=10).json()
-                    text = msg.get('text', '') + " ".join(msg.get('html', []))
-                    match = re.search(r'\b(\d{6})\b', text)
-                    if match:
-                        return match.group(1)
+                if provider == "gacormail":
+                    # Endpoint baca pesan Gacormail (sesuaikan jika berbeda)
+                    r = client.get(f"https://www.gacormail.me/api/v1/inbox/{token}/messages", timeout=10)
+                    msgs = r.json().get("messages", [])
+                    if msgs:
+                        text = msgs[0].get("body", "") + msgs[0].get("html", "")
+                        match = re.search(r'\b(\d{6})\b', text)
+                        if match: return match.group(1)
+                else:
+                    # Mail.tm
+                    r = client.get("https://api.mail.tm/messages", headers={"Authorization": f"Bearer {token}"}, timeout=10)
+                    msgs = r.json()['hydra:member']
+                    if msgs:
+                        msg_id = msgs[0]['id']
+                        msg = client.get(f"https://api.mail.tm/messages/{msg_id}", headers={"Authorization": f"Bearer {token}"}, timeout=10).json()
+                        text = msg.get('text', '') + " ".join(msg.get('html', []))
+                        match = re.search(r'\b(\d{6})\b', text)
+                        if match: return match.group(1)
             except Exception:
                 pass
             time.sleep(4)
         raise Exception("OTP tidak ditemukan dalam batas waktu")
 
-# --- FUNGSI UTAMA FARMING MUSE.AI ---
+# --- FUNGSI UTAMA ---
 def run_one(headless=True):
     proxy_url = os.getenv("PROXY_URL")
     invite_code = os.getenv("INVITE_CODE")
@@ -56,7 +80,7 @@ def run_one(headless=True):
         except Exception as e:
             print(f"[-] Peringatan: Proxy gagal terhubung atau lambat. ({e})")
 
-    email_address, email_token = get_temp_email()
+    email_address, email_token, provider = get_gacormail()
     print(f"[*] Menggunakan email: {email_address}")
     
     with sync_playwright() as p:
@@ -65,6 +89,7 @@ def run_one(headless=True):
             proxy={"server": proxy_url} if proxy_url else None,
             args=["--no-sandbox", "--disable-dev-shm-usage", "--ignore-certificate-errors"]
         )
+        # Patchright otomatis menangani stealth, tapi kita tetap bisa menambahkan context
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             ignore_https_errors=True
@@ -76,11 +101,11 @@ def run_one(headless=True):
             print("[*] Membuka halaman Muse.ai...")
             page.goto("https://muse.ai/join", wait_until="commit", timeout=90000)
             print("[*] Halaman terhubung. Menunggu React/Cloudflare selesai...")
-            time.sleep(10)
+            time.sleep(15) # Patchright mungkin butuh waktu lebih untuk menyelesaikan challenge
             
             email_input = page.locator('input[type="email"]').first
             if not email_input.is_visible():
-                raise Exception("Form email tidak muncul. Kemungkinan diblokir Cloudflare (IP Proxy buruk).")
+                raise Exception("Form email tidak muncul. Proxy mungkin masih diblokir atau Patchright gagal menyelesaikan challenge.")
             
             print("[*] Form email ditemukan. Mengisi email...")
             email_input.fill(email_address)
@@ -88,7 +113,7 @@ def run_one(headless=True):
             
             print("[*] Menunggu OTP dari email...")
             time.sleep(5)
-            otp = get_otp(email_token)
+            otp = get_otp(provider, email_token)
             print(f"[+] OTP diterima: {otp}")
             
             page.locator('input[type="text"]').first.fill(otp)
@@ -114,16 +139,11 @@ def run_one(headless=True):
             return True
 
         except Exception as e:
-            # 1. CETAK ERROR ASLINYA DULU
             print(f"[-] Error Utama: {e}")
-            
-            # 2. Screenshot dengan batas waktu sangat pendek (5 detik saja)
             try:
                 page.screenshot(path=f"/tmp/muse_fail_{email_address}.png", timeout=5000)
-                print("[*] Screenshot error berhasil disimpan.")
-            except Exception as ss_err:
-                print(f"[-] Gagal mengambil screenshot (Browser hang): {ss_err}")
-                
+            except Exception:
+                pass
             return False
         finally:
             browser.close()
