@@ -1,10 +1,8 @@
-# Gunakan Python versi slim yang ringan
 FROM python:3.11-slim
 
-# Set working directory
 WORKDIR /app
 
-# Instal dependensi sistem yang dibutuhkan Chromium
+# 1. Instal dependensi sistem untuk Chromium
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libnss3 \
     libnspr4 \
@@ -21,15 +19,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements dan install library Python
+# 2. Copy requirements dan install library Python
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# PERINTAH WAJIB: Unduh Chromium untuk Playwright beserta dependensinya
-RUN playwright install --with-deps chromium
+# 3. UNDUH CHROMIUM (Ini langkah yang sebelumnya gagal/terlewat)
+RUN playwright install chromium
 
-# Copy sisa file proyek
+# 4. Copy sisa file
 COPY . .
 
-# Jalankan Bot Telegram
+# 5. Jalankan bot
 CMD ["python", "telegram_bot.py"]
