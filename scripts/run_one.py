@@ -1,157 +1,95 @@
 import os
-import random
-import string
-import re
-import time
-import httpx
-# GANTI IMPORT PLAYWRIGHT MENJADI PATCHRIGHT
-from patchright.sync_api import sync_playwright 
+import subprocess
+import asyncio
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
+from dotenv import load_dotenv
 
-# --- FUNGSI EMAIL GACORMAIL ---
-def get_gacormail():
-    with httpx.Client() as client:
-        try:
-            # Endpoint internal Gacormail (bisa berubah sewaktu-waktu)
-            r = client.post("https://www.gacormail.me/api/v1/inbox", timeout=15)
-            data = r.json()
-            email_address = data.get("address")
-            token = data.get("token") 
-            
-            if email_address and token:
-                print(f"[+] Berhasil membuat email Gacormail: {email_address}")
-                return email_address, token, "gacormail"
-        except Exception as e:
-            print(f"[-] Gacormail gagal: {e}. Fallback ke Mail.tm...")
-        
-        # Fallback ke Mail.tm jika API Gacormail error
-        try:
-            r = client.get("https://api.mail.tm/domains", timeout=10)
-            domain = r.json()['hydra:member'][0]['domain']
-            local = ''.join(random.choices(string.ascii_lowercase + string.digits, k=12))
-            address = f"{local}@{domain}"
-            password = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
-            client.post("https://api.mail.tm/accounts", json={"address": address, "password": password}, timeout=10)
-            r = client.post("https://api.mail.tm/token", json={"address": address, "password": password}, timeout=10)
-            print(f"[+] Berhasil membuat email Mail.tm: {address}")
-            return address, r.json()['token'], "mailtm"
-        except Exception as e:
-            raise Exception(f"Semua provider email gagal: {e}")
+load_dotenv()
 
-def get_otp(provider, token, timeout=120):
-    with httpx.Client() as client:
-        start = time.time()
-        while time.time() - start < timeout:
-            try:
-                if provider == "gacormail":
-                    r = client.get(f"https://www.gacormail.me/api/v1/inbox/{token}/messages", timeout=10)
-                    msgs = r.json().get("messages", [])
-                    if msgs:
-                        text = msgs[0].get("body", "") + msgs[0].get("html", "")
-                        match = re.search(r'\b(\d{6})\b', text)
-                        if match: return match.group(1)
-                else:
-                    r = client.get("https://api.mail.tm/messages", headers={"Authorization": f"Bearer {token}"}, timeout=10)
-                    msgs = r.json()['hydra:member']
-                    if msgs:
-                        msg_id = msgs[0]['id']
-                        msg = client.get(f"https://api.mail.tm/messages/{msg_id}", headers={"Authorization": f"Bearer {token}"}, timeout=10).json()
-                        text = msg.get('text', '') + " ".join(msg.get('html', []))
-                        match = re.search(r'\b(\d{6})\b', text)
-                        if match: return match.group(1)
-            except Exception:
-                pass
-            time.sleep(4)
-        raise Exception("OTP tidak ditemukan dalam batas waktu")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TOKEN:
+    raise RuntimeError("TELEGRAM_BOT_TOKEN belum di-set di environment")
 
-# --- FUNGSI UTAMA ---
-def run_one(headless=True):
-    proxy_url = os.getenv("PROXY_URL")
-    invite_code = os.getenv("INVITE_CODE")
-    
-    if proxy_url:
-        print(f"[*] Mengetes koneksi Proxy...")
-        try:
-            with httpx.Client(proxy=proxy_url, timeout=15) as client:
-                ip_check = client.get("https://api.ipify.org?format=json")
-                print(f"[+] Proxy Terhubung! IP Keluar: {ip_check.json()['ip']}")
-        except Exception as e:
-            print(f"[-] Peringatan: Proxy gagal terhubung atau lambat. ({e})")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "🤖 <b>Muse.ai Farming Bot</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Bot ini akan otomatis menggunakan proxy acak dari <code>proxies.txt</code> Anda.\n\n"
+        "Ketik /farm untuk mulai membuat akun Muse.ai."
+    )
+    await update.message.reply_text(text, parse_mode="HTML")
 
-    email_address, email_token, provider = get_gacormail()
-    print(f"[*] Menggunakan email: {email_address}")
-    
-    with sync_playwright() as p:
-        # Patchright membutuhkan channel="chrome" atau menggunakan chromium bawaannya
-        browser = p.chromium.launch(
-            headless=headless,
-            proxy={"server": proxy_url} if proxy_url else None,
-            args=["--no-sandbox", "--disable-dev-shm-usage", "--ignore-certificate-errors"]
-        )
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            ignore_https_errors=True,
-            viewport={"width": 1366, "height": 768}
-        )
-        page = context.new_page()
-        page.set_default_timeout(90000) 
-        
-        try:
-            print("[*] Membuka halaman Muse.ai...")
-            page.goto("https://muse.ai/join", wait_until="commit", timeout=90000)
-            print("[*] Halaman terhubung. Menunggu React/Cloudflare selesai...")
-            time.sleep(15) # Beri waktu Patchright melewati Cloudflare
+async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text(
+        "⏳ <b>Memulai proses farming Muse.ai...</b>\n"
+        "1. Membaca proxy dari file...\n"
+        "2. Membuka Cloud Browser...\n"
+        "3. Menjalankan otomasi...", 
+        parse_mode="HTML"
+    )
+
+    # Menjalankan script cloud_runner.py di background
+    process = subprocess.Popen(
+        ["python", "scripts/cloud_runner.py"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True
+    )
+
+    last_update_time = asyncio.get_event_loop().time()
+    log_buffer = []
+
+    # Membaca log secara real-time
+    while True:
+        output = process.stdout.readline()
+        if output == '' and process.poll() is not None:
+            break
+        if output:
+            line = output.strip()
+            log_buffer.append(line)
             
-            email_input = page.locator('input[type="email"]').first
-            if not email_input.is_visible():
-                raise Exception("Form email tidak muncul. Proxy mungkin diblokir atau Cloudflare tidak terlewati.")
+            if len(log_buffer) > 10:
+                log_buffer.pop(0)
+
+            current_time = asyncio.get_event_loop().time()
+            is_important = any(keyword in line for keyword in ["BERHASIL", "BYPASS", "GAGAL", "Error", "Workspace"])
             
-            print("[*] Form email ditemukan. Mengisi email...")
-            email_input.click()
-            time.sleep(random.uniform(0.5, 1.5))
-            email_input.type(email_address, delay=random.randint(50, 150))
-            
-            time.sleep(random.uniform(1, 2))
-            page.locator('button[type="submit"]').first.click()
-            
-            print("[*] Menunggu OTP dari email...")
-            time.sleep(5)
-            otp = get_otp(provider, email_token)
-            print(f"[+] OTP diterima: {otp}")
-            
-            otp_input = page.locator('input[type="text"]').first
-            otp_input.click()
-            otp_input.type(otp, delay=random.randint(50, 150))
-            time.sleep(random.uniform(1, 2))
-            page.locator('button[type="submit"]').first.click()
-            
-            print("[*] Menunggu verifikasi akun...")
-            time.sleep(10)
-            
-            if invite_code:
-                print(f"[*] Menerapkan kode referral: {invite_code}")
+            if current_time - last_update_time > 5 or is_important:
                 try:
-                    page.goto("https://muse.ai/settings", wait_until="domcontentloaded", timeout=60000)
-                    time.sleep(5)
-                    ref_input = page.locator('input[placeholder*="invite" i], input[placeholder*="referral" i]').first
-                    if ref_input.is_visible():
-                        ref_input.fill(invite_code)
-                        page.locator('button:has-text("Redeem"), button:has-text("Apply")').first.click()
-                        time.sleep(5)
-                except Exception as e:
-                    print(f"[-] Gagal memasukkan referral: {e}")
-            
-            print(f"[+] SUKSES! Akun {email_address} berhasil dibuat.")
-            return True
+                    display_logs = "\n".join([f"• {l}" for l in log_buffer[-3:]])
+                    await msg.edit_text(
+                        f"⏳ <b>Proses Farming...</b>\n\n"
+                        f"<code>{display_logs}</code>", 
+                        parse_mode="HTML"
+                    )
+                    last_update_time = current_time
+                except Exception:
+                    pass 
 
-        except Exception as e:
-            print(f"[-] Error Utama: {e}")
-            try:
-                page.screenshot(path=f"/tmp/muse_fail_{email_address}.png", timeout=5000)
-            except Exception:
-                pass
-            return False
-        finally:
-            browser.close()
+    rc = process.poll()
+    if rc == 0:
+        await msg.edit_text(
+            "✅ <b>Farming Selesai!</b>\n\n"
+            "Akun Muse.ai berhasil dibuat. Cek console Railway untuk melihat detail email/password.", 
+            parse_mode="HTML"
+        )
+    else:
+        error_logs = "\n".join([f"• {l}" for l in log_buffer[-5:]])
+        await msg.edit_text(
+            f"❌ <b>Farming Gagal!</b> (Exit code: {rc})\n\n"
+            f"<b>Log Terakhir:</b>\n<code>{error_logs}</code>", 
+            parse_mode="HTML"
+        )
+
+def main():
+    app = Application.builder().token(TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("farm", farm))
+    
+    print("Bot Telegram berjalan...")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    run_one(headless=True)
+    main()
