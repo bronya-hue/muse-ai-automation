@@ -1,8 +1,5 @@
 import time
 import random
-import re
-import os
-import sys
 from playwright.sync_api import Page
 
 # ==========================================
@@ -76,18 +73,15 @@ def do_birthday(page: Page):
     log("Mengisi tanggal lahir...")
     dismiss_dialog(page)
     try:
-        # Cari input bulan, tanggal, tahun (bisa berupa select atau input text)
         month_input = page.locator('select[name="month"], input[name="month"]').first
         day_input = page.locator('select[name="day"], input[name="day"]').first
         year_input = page.locator('select[name="year"], input[name="year"]').first
 
         if month_input.count() > 0:
-            # Gunakan nilai acak (tahun 1995-2000)
             month = str(random.randint(1, 12))
             day = str(random.randint(1, 28))
             year = str(random.randint(1995, 2000))
             
-            # Isi (handle jika select vs input)
             if month_input.evaluate("el => el.tagName") == "SELECT":
                 month_input.select_option(month)
                 day_input.select_option(day)
@@ -97,7 +91,6 @@ def do_birthday(page: Page):
                 day_input.fill(day)
                 year_input.fill(year)
 
-        # Klik tombol lanjut
         submit_btn = page.locator('button[type="submit"], button:has-text("Next"), button:has-text("Continue")').first
         if submit_btn.is_visible():
             submit_btn.click(force=True)
@@ -110,13 +103,11 @@ def do_disclosure(page: Page):
     log("Menyetujui disclosure/terms...")
     dismiss_dialog(page)
     try:
-        # Centang checkbox jika ada
         checkboxes = page.locator('input[type="checkbox"]').all()
         for cb in checkboxes:
             if not cb.is_checked():
                 cb.check(force=True)
         
-        # Klik tombol Agree/Continue
         agree_btn = page.locator('button:has-text("Agree"), button:has-text("I accept"), button:has-text("Continue")').first
         if agree_btn.is_visible():
             agree_btn.click(force=True)
@@ -150,7 +141,6 @@ def do_skip_card(page: Page) -> bool:
             try:
                 btn.click(force=True)
                 time.sleep(5)
-                # Jika layar berubah dari 'card', berarti berhasil
                 if screen_of(page) != "card":
                     log("✅ BERHASIL BYPASS KARTU via Social Link!")
                     return True
@@ -176,8 +166,7 @@ def do_skip_card(page: Page) -> bool:
             except Exception as e:
                 log(f"Gagal klik skip: {e}")
 
-    # 3. Jika pakai Cloud Browser yang sangat bersih, kadang halaman ini auto-lolos
-    # Coba refresh halaman sekali
+    # 3. Coba refresh halaman sekali
     log("Mencoba refresh halaman untuk cek apakah verifikasi hilang...")
     page.reload(wait_until="networkidle")
     time.sleep(3)
@@ -205,7 +194,8 @@ def do_redeem(page: Page, invite_code: str):
 # ==========================================
 # PIPELINE UTAMA
 # ==========================================
-def run_all_after_email(page: Page, invite_code: str = ""):
+# 🔥 PERBAIKAN: Tambahkan parameter 'browser' di sini
+def run_all_after_email(page: Page, browser, invite_code: str = ""):
     """
     Dijalankan setelah email & OTP berhasil dimasukkan.
     Akan melakukan loop sampai masuk ke Workspace.
@@ -237,20 +227,18 @@ def run_all_after_email(page: Page, invite_code: str = ""):
                     take_status_snapshot(page, "card_stuck.png")
                     return False
             else:
-                time.sleep(3) # Tunggu transisi
+                time.sleep(3) 
                 
         elif current_screen == "workspace":
             log("🎉 BERHASIL MASUK KE WORKSPACE MUSE.AI!")
             break
             
         elif current_screen == "unknown":
-            # Kadang halaman sedang loading
             time.sleep(2)
             
         else:
             time.sleep(2)
 
-    # Redeem code jika disediakan
     if invite_code and card_skipped:
         do_redeem(page, invite_code)
         
