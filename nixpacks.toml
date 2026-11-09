@@ -1,9 +1,0 @@
-# Jangan definisikan nixPkgs untuk Node.js agar provider Python tetap aktif
-[phases.setup]
-aptPkgs = ["nodejs", "npm"]
-
-[phases.install]
-cmds = ["npm install", "pip install -r requirements.txt"]
-
-[start]
-cmd = "python telegram_bot.py"
