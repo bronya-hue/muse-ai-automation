@@ -4,20 +4,20 @@ import sys
 import time
 import subprocess
 import urllib.request
-from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-ROOT = Path(__file__).resolve().parent.parent
-SCRIPTS = ROOT / "scripts"
-sys.path.insert(0, str(SCRIPTS))
+# Gunakan os.getcwd() agar path selalu tepat di dalam Docker (/app)
+ROOT = os.getcwd()
+SCRIPTS = os.path.join(ROOT, "scripts")
+sys.path.insert(0, SCRIPTS)
 
 try:
     from dotenv import load_dotenv
-    load_dotenv(str(ROOT / ".env"))
+    load_dotenv(os.path.join(ROOT, ".env"))
 except ImportError:
     pass
 
@@ -46,13 +46,14 @@ def run_one(headless: bool = True):
     env["FINGERPRINT"] = str(random.randint(100000, 999999))
     env["HEADLESS"] = "1" if headless else "0"
 
-    launch_js = SCRIPTS / "launch_profile.js"
+    # Gunakan os.path.join agar formatnya /app/scripts/launch_profile.js
+    launch_js = os.path.join(SCRIPTS, "launch_profile.js")
+    
     log(f"Launching CloakBrowser on port {port}...")
     
-    # Jalankan Node.js
     browser_proc = subprocess.Popen(
-        ["node", str(launch_js)],
-        cwd=str(ROOT),
+        ["node", launch_js],
+        cwd=ROOT,
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -65,15 +66,25 @@ def run_one(headless: bool = True):
         log("Waiting for browser CDP endpoint...")
         if not cdp_ready(port, timeout=40):
             log("Browser CDP endpoint timed out!")
-            return False
+            # Tangkap error dari Node.js agar kelihatan penyebabnya
+            try:
+                browser_proc.terminate()
+                out, _ = browser_proc.communicate(timeout=5)
+                if out:
+                    log("=== OUTPUT DARI NODE.JS (LAUNCH_PROFILE.JS) ===")
+                    for line in out.splitlines():
+                        log(f"NODE: {line}")
+                    log("==============================================")
+            except Exception as e:
+                log(f"Gagal mengambil log Node.js: {e}")
+            sys.exit(1) # Paksa keluar dengan kode error
 
         log("CDP ready! Starting muse_bot.py --one...")
-        bot_py = SCRIPTS / "muse_bot.py"
+        bot_py = os.path.join(SCRIPTS, "muse_bot.py")
         
-        # Jalankan Python (Gunakan sys.executable agar universal)
         bot_proc = subprocess.Popen(
-            [sys.executable, "-u", str(bot_py), "--one"],
-            cwd=str(ROOT),
+            [sys.executable, "-u", bot_py, "--one"],
+            cwd=ROOT,
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -87,10 +98,12 @@ def run_one(headless: bool = True):
 
         bot_proc.wait()
         log(f"muse_bot exited with return code {bot_proc.returncode}")
-        return bot_proc.returncode == 0
+        
+        if bot_proc.returncode != 0:
+            sys.exit(1) # Paksa keluar dengan kode error jika bot gagal
+            
     finally:
         log("Cleaning up browser process...")
-        # PERBAIKAN: Hapus taskkill (Windows), gunakan terminate() (Universal/Linux)
         try:
             browser_proc.terminate()
             browser_proc.wait(timeout=5)
