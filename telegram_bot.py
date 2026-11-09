@@ -29,15 +29,19 @@ async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
-    # Jalankan run_one.py (bukan cloud_runner.py)
-    process = subprocess.Popen(
-        ["python", "scripts/run_one.py"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+    try:
+        # PERUBAHAN PENTING: Gunakan "python3", bukan "python"
+        process = subprocess.Popen(
+            ["python3", "scripts/run_one.py"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except Exception as e:
+        await msg.edit_text(f"❌ <b>Gagal menjalankan script:</b>\n<code>{e}</code>", parse_mode="HTML")
+        return
 
     last_update_time = asyncio.get_event_loop().time()
     log_buffer = []
