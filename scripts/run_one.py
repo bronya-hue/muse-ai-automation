@@ -1,95 +1,93 @@
+"""Single-account end-to-end runner with live streamed output."""
 import os
+import sys
+import time
 import subprocess
-import asyncio
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
-from dotenv import load_dotenv
+import urllib.request
+from pathlib import Path
 
-load_dotenv()
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-if not TOKEN:
-    raise RuntimeError("TELEGRAM_BOT_TOKEN belum di-set di environment")
+ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS = ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS))
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "🤖 <b>Muse.ai Farming Bot</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Bot ini akan otomatis menggunakan proxy acak dari <code>proxies.txt</code> Anda.\n\n"
-        "Ketik /farm untuk mulai membuat akun Muse.ai."
-    )
-    await update.message.reply_text(text, parse_mode="HTML")
+try:
+    from dotenv import load_dotenv
+    load_dotenv(str(ROOT / ".env"))
+except ImportError:
+    pass
 
-async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text(
-        "⏳ <b>Memulai proses farming Muse.ai...</b>\n"
-        "1. Membaca proxy dari file...\n"
-        "2. Membuka Cloud Browser...\n"
-        "3. Menjalankan otomasi...", 
-        parse_mode="HTML"
-    )
+def log(msg: str):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
-    # Menjalankan script cloud_runner.py di background
-    process = subprocess.Popen(
-        ["python", "scripts/cloud_runner.py"],
+def cdp_ready(port: int, timeout: int = 30) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=2) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            time.sleep(0.5)
+    return False
+
+def run_one(headless: bool = True):
+    import secrets
+    import random
+    port = 9222
+    env = dict(os.environ)
+    env["CDP_URL"] = f"http://127.0.0.1:{port}"
+    env["CDP_PORT"] = str(port)
+    env["PROFILE_NAME"] = f"muse_{secrets.token_hex(4)}"
+    env["FINGERPRINT"] = str(random.randint(100000, 999999))
+    env["HEADLESS"] = "1" if headless else "0"
+
+    launch_js = SCRIPTS / "launch_profile.js"
+    log(f"Launching CloakBrowser on port {port}...")
+    browser_proc = subprocess.Popen(
+        ["node", str(launch_js)],
+        cwd=str(ROOT),
+        env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True
+        text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
-    last_update_time = asyncio.get_event_loop().time()
-    log_buffer = []
+    try:
+        log("Waiting for browser CDP endpoint...")
+        if not cdp_ready(port, timeout=40):
+            log("Browser CDP endpoint timed out!")
+            return False
 
-    # Membaca log secara real-time
-    while True:
-        output = process.stdout.readline()
-        if output == '' and process.poll() is not None:
-            break
-        if output:
-            line = output.strip()
-            log_buffer.append(line)
-            
-            if len(log_buffer) > 10:
-                log_buffer.pop(0)
-
-            current_time = asyncio.get_event_loop().time()
-            is_important = any(keyword in line for keyword in ["BERHASIL", "BYPASS", "GAGAL", "Error", "Workspace"])
-            
-            if current_time - last_update_time > 5 or is_important:
-                try:
-                    display_logs = "\n".join([f"• {l}" for l in log_buffer[-3:]])
-                    await msg.edit_text(
-                        f"⏳ <b>Proses Farming...</b>\n\n"
-                        f"<code>{display_logs}</code>", 
-                        parse_mode="HTML"
-                    )
-                    last_update_time = current_time
-                except Exception:
-                    pass 
-
-    rc = process.poll()
-    if rc == 0:
-        await msg.edit_text(
-            "✅ <b>Farming Selesai!</b>\n\n"
-            "Akun Muse.ai berhasil dibuat. Cek console Railway untuk melihat detail email/password.", 
-            parse_mode="HTML"
-        )
-    else:
-        error_logs = "\n".join([f"• {l}" for l in log_buffer[-5:]])
-        await msg.edit_text(
-            f"❌ <b>Farming Gagal!</b> (Exit code: {rc})\n\n"
-            f"<b>Log Terakhir:</b>\n<code>{error_logs}</code>", 
-            parse_mode="HTML"
+        log("CDP ready! Starting muse_bot.py --one...")
+        bot_py = SCRIPTS / "muse_bot.py"
+        bot_proc = subprocess.Popen(
+            [sys.executable, "-u", str(bot_py), "--one"],
+            cwd=str(ROOT),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
 
-def main():
-    app = Application.builder().token(TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("farm", farm))
-    
-    print("Bot Telegram berjalan...")
-    app.run_polling(drop_pending_updates=True)
+        for line in bot_proc.stdout:
+            print(line, end="", flush=True)
+
+        bot_proc.wait()
+        log(f"muse_bot exited with return code {bot_proc.returncode}")
+        return bot_proc.returncode == 0
+    finally:
+        log("Cleaning up browser process...")
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(browser_proc.pid)], capture_output=True)
 
 if __name__ == "__main__":
-    main()
+    headless_mode = "--headed" not in sys.argv
+    run_one(headless=headless_mode)
