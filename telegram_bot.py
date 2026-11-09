@@ -1,165 +1,96 @@
-import telebot
-import subprocess
 import os
-import threading
-import json
+import subprocess
+import asyncio
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
+from dotenv import load_dotenv
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-bot = telebot.TeleBot(BOT_TOKEN)
+load_dotenv()
 
-CONFIG_FILE = "config.json"
-is_farming = False
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TOKEN:
+    raise RuntimeError("TELEGRAM_BOT_TOKEN belum di-set di environment")
 
-# --- FUNGSI KONFIGURASI ---
-def load_config():
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r") as f:
-            return json.load(f)
-    return {}
-
-def save_config(key, value):
-    config = load_config()
-    config[key] = value
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f, indent=4)
-
-# --- MENU UTAMA ---
-@bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "🤖 *Muse.ai Auto-Farmer Bot*\n\n"
-        "🛠 *Pengaturan:*\n"
-        "`/setproxy` - Atur Proxy (Wajib)\n"
-        "`/setinvite` - Atur Kode Referral\n"
-        "`/setcard` - Atur VCC (Nomor, Expiry, CVV)\n\n"
-        "🚀 *Aksi:*\n"
-        "`/farm` - Mulai buat 1 akun\n"
-        "`/status` - Cek pengaturan & status bot"
+        "🤖 <b>Muse.ai Farming Bot</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Bot akan otomatis menggunakan proxy acak dari <code>proxies.txt</code>.\n\n"
+        "Ketik /farm untuk mulai membuat akun Muse.ai."
     )
-    bot.reply_to(message, text, parse_mode='Markdown')
+    await update.message.reply_text(text, parse_mode="HTML")
 
-# --- SET PROXY ---
-@bot.message_handler(commands=['setproxy'])
-def ask_proxy(message):
-    msg = bot.reply_to(message, "🔗 Kirimkan URL Proxy Anda.\nContoh: `http://user:pass@ip:port`", parse_mode='Markdown')
-    bot.register_next_step_handler(msg, save_proxy)
+async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text(
+        "⏳ <b>Memulai proses farming Muse.ai...</b>\n"
+        "1. Membaca proxy dari file...\n"
+        "2. Membuka CloakBrowser...\n"
+        "3. Menjalankan otomasi...", 
+        parse_mode="HTML"
+    )
 
-def save_proxy(message):
-    proxy_url = message.text.strip()
-    save_config("PROXY_URL", proxy_url)
-    bot.reply_to(message, "✅ Proxy berhasil disimpan!")
+    # Jalankan run_one.py (bukan cloud_runner.py)
+    process = subprocess.Popen(
+        ["python", "scripts/run_one.py"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
 
-# --- SET INVITE CODE ---
-@bot.message_handler(commands=['setinvite'])
-def ask_invite(message):
-    msg = bot.reply_to(message, "🎟 Kirimkan Kode Referral Muse.ai Anda.")
-    bot.register_next_step_handler(msg, save_invite)
+    last_update_time = asyncio.get_event_loop().time()
+    log_buffer = []
 
-def save_invite(message):
-    invite_code = message.text.strip()
-    save_config("INVITE_CODE", invite_code)
-    bot.reply_to(message, "✅ Kode Referral berhasil disimpan!")
-
-# --- SET CARD (VCC) ---
-@bot.message_handler(commands=['setcard'])
-def ask_card(message):
-    msg = bot.reply_to(message, "💳 Kirimkan data kartu dengan format:\n`NomorKartu|MM/YY|CVV`\n\nContoh: `4000123456789010|12/26|123`", parse_mode='Markdown')
-    bot.register_next_step_handler(msg, save_card)
-
-def save_card(message):
-    try:
-        data = message.text.split("|")
-        if len(data) != 3:
-            raise ValueError("Format salah")
-        
-        save_config("CARD_NUMBER", data[0].strip())
-        save_config("CARD_EXPIRY", data[1].strip())
-        save_config("CARD_CVV", data[2].strip())
-        bot.reply_to(message, "✅ Data VCC berhasil disimpan!")
-    except Exception:
-        bot.reply_to(message, "❌ Format salah! Gunakan format: `Nomor|MM/YY|CVV`", parse_mode='Markdown')
-
-# --- CEK STATUS ---
-@bot.message_handler(commands=['status'])
-def check_status(message):
-    global is_farming
-    config = load_config()
-    
-    status_text = "📊 *Status Bot*\n\n"
-    status_text += f"🔄 Farming: {'⏳ Berjalan' if is_farming else '✅ Idle'}\n\n"
-    status_text += "⚙️ *Konfigurasi Tersimpan:*\n"
-    
-    proxy = config.get("PROXY_URL", "Belum diset ❌")
-    if proxy != "Belum diset ❌" and len(proxy) > 15:
-        proxy = proxy[:10] + "..." + proxy[-5:] # Sensor proxy
-    status_text += f"🌐 Proxy: `{proxy}`\n"
-    
-    invite = config.get("INVITE_CODE", "Belum diset ❌")
-    status_text += f"🎟 Invite: `{invite}`\n"
-    
-    card = config.get("CARD_NUMBER", "Belum diset ❌")
-    if card != "Belum diset ❌":
-        card = "**** **** **** " + card[-4:] # Sensor nomor kartu
-    status_text += f"💳 Kartu: `{card}`\n"
-
-    bot.reply_to(message, status_text, parse_mode='Markdown')
-
-# --- JALANKAN FARMING ---
-@bot.message_handler(commands=['farm'])
-def start_farming(message):
-    global is_farming
-    if is_farming:
-        bot.reply_to(message, "❌ Proses farming sedang berjalan! Tunggu hingga selesai.")
-        return
-    
-    config = load_config()
-    if "PROXY_URL" not in config:
-        bot.reply_to(message, "⚠️ Proxy belum diset! Silakan ketik `/setproxy` terlebih dahulu.", parse_mode='Markdown')
-        return
-
-    is_farming = True
-    msg = bot.reply_to(message, "⏳ Memulai proses farming Muse.ai...\nMembuka browser & mendaftar akun. Mohon tunggu 1-2 menit.")
-    
-    thread = threading.Thread(target=run_farm_script, args=(message.chat.id, msg.message_id, config))
-    thread.start()
-
-def run_farm_script(chat_id, message_id, config):
-    global is_farming
-    try:
-        # Gabungkan environment variable bawaan sistem dengan config dari Telegram
-        env_vars = os.environ.copy()
-        env_vars.update(config)
-
-        # Jalankan skrip farming
-        process = subprocess.run(
-            ["python", "scripts/run_one.py"], 
-            capture_output=True, 
-            text=True,
-            timeout=300,
-            env=env_vars # Masukkan environment variables yang baru
-        )
-        
-        output = process.stdout
-        error = process.stderr
-        
-        if process.returncode == 0:
-            result_text = f"✅ *Farming Selesai!*\n\nLog:\n`{output[-600:]}`"
-        else:
-            result_text = f"❌ *Farming Gagal*\n\nError:\n`{error[-600:]}`"
+    while True:
+        output = process.stdout.readline()
+        if output == '' and process.poll() is not None:
+            break
+        if output:
+            line = output.strip()
+            log_buffer.append(line)
             
-    except subprocess.TimeoutExpired:
-        result_text = "❌ *Error:* Proses farming melebihi batas waktu (5 menit). Server mungkin kehabisan RAM atau stuck."
-    except Exception as e:
-        result_text = f"❌ *Error Sistem:* {str(e)}"
-    finally:
-        is_farming = False
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=result_text,
-            parse_mode='Markdown'
+            if len(log_buffer) > 10:
+                log_buffer.pop(0)
+
+            current_time = asyncio.get_event_loop().time()
+            is_important = any(keyword in line for keyword in ["BERHASIL", "BYPASS", "GAGAL", "Error", "Workspace", "proxy"])
+            
+            if current_time - last_update_time > 5 or is_important:
+                try:
+                    display_logs = "\n".join([f"• {l}" for l in log_buffer[-3:]])
+                    await msg.edit_text(
+                        f"⏳ <b>Proses Farming...</b>\n\n"
+                        f"<code>{display_logs}</code>", 
+                        parse_mode="HTML"
+                    )
+                    last_update_time = current_time
+                except Exception:
+                    pass 
+
+    rc = process.poll()
+    if rc == 0:
+        await msg.edit_text(
+            "✅ <b>Farming Selesai!</b>\n\n"
+            "Akun Muse.ai berhasil dibuat. Cek console Railway untuk melihat detail email/password.", 
+            parse_mode="HTML"
+        )
+    else:
+        error_logs = "\n".join([f"• {l}" for l in log_buffer[-5:]])
+        await msg.edit_text(
+            f"❌ <b>Farming Gagal!</b> (Exit code: {rc})\n\n"
+            f"<b>Log Terakhir:</b>\n<code>{error_logs}</code>", 
+            parse_mode="HTML"
         )
 
-if __name__ == '__main__':
+def main():
+    app = Application.builder().token(TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("farm", farm))
+    
     print("Bot Telegram berjalan...")
-    bot.infinity_polling()
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
