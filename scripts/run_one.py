@@ -48,6 +48,8 @@ def run_one(headless: bool = True):
 
     launch_js = SCRIPTS / "launch_profile.js"
     log(f"Launching CloakBrowser on port {port}...")
+    
+    # Jalankan Node.js
     browser_proc = subprocess.Popen(
         ["node", str(launch_js)],
         cwd=str(ROOT),
@@ -67,6 +69,8 @@ def run_one(headless: bool = True):
 
         log("CDP ready! Starting muse_bot.py --one...")
         bot_py = SCRIPTS / "muse_bot.py"
+        
+        # Jalankan Python (Gunakan sys.executable agar universal)
         bot_proc = subprocess.Popen(
             [sys.executable, "-u", str(bot_py), "--one"],
             cwd=str(ROOT),
@@ -86,7 +90,15 @@ def run_one(headless: bool = True):
         return bot_proc.returncode == 0
     finally:
         log("Cleaning up browser process...")
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(browser_proc.pid)], capture_output=True)
+        # PERBAIKAN: Hapus taskkill (Windows), gunakan terminate() (Universal/Linux)
+        try:
+            browser_proc.terminate()
+            browser_proc.wait(timeout=5)
+        except Exception:
+            try:
+                browser_proc.kill()
+            except Exception:
+                pass
 
 if __name__ == "__main__":
     headless_mode = "--headed" not in sys.argv
