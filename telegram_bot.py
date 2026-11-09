@@ -7,9 +7,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
-    raise RuntimeError("TELEGRAM_BOT_TOKEN belum di-set di environment")
+    raise RuntimeError("BOT_TOKEN belum di-set di environment")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
