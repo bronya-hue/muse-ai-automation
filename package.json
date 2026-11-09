@@ -10,7 +10,6 @@
     "puppeteer": "^21.11.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
-    "https-proxy-agent": "^7.0.2",
-    "axios": "^1.6.8"
+    "proxy-chain": "^2.4.0"
   }
 }
