@@ -1,6 +1,7 @@
 import os
 import subprocess
 import asyncio
+import re
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from dotenv import load_dotenv
@@ -30,7 +31,6 @@ async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
-        # PERUBAHAN PENTING: Gunakan "python3", bukan "python"
         process = subprocess.Popen(
             ["python3", "scripts/run_one.py"],
             stdout=subprocess.PIPE,
@@ -44,7 +44,8 @@ async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     last_update_time = asyncio.get_event_loop().time()
-    log_buffer = []
+    log_buffer = []      # Untuk update live di Telegram
+    full_logs = []       # Menyimpan SEMUA log untuk diekstrak
 
     while True:
         output = process.stdout.readline()
@@ -52,20 +53,20 @@ async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             break
         if output:
             line = output.strip()
+            full_logs.append(line)
             log_buffer.append(line)
             
-            if len(log_buffer) > 10:
+            if len(log_buffer) > 5:
                 log_buffer.pop(0)
 
             current_time = asyncio.get_event_loop().time()
-            is_important = any(keyword in line for keyword in ["BERHASIL", "BYPASS", "GAGAL", "Error", "Workspace", "proxy"])
+            is_important = any(keyword in line for keyword in ["BERHASIL", "BYPASS", "GAGAL", "Error", "Workspace", "proxy", "Email", "Password"])
             
             if current_time - last_update_time > 5 or is_important:
                 try:
                     display_logs = "\n".join([f"• {l}" for l in log_buffer[-3:]])
                     await msg.edit_text(
-                        f"⏳ <b>Proses Farming...</b>\n\n"
-                        f"<code>{display_logs}</code>", 
+                        f"⏳ <b>Proses Farming...</b>\n\n<code>{display_logs}</code>", 
                         parse_mode="HTML"
                     )
                     last_update_time = current_time
@@ -73,26 +74,45 @@ async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass 
 
     rc = process.poll()
+    full_text = "\n".join(full_logs)
+    
     if rc == 0:
-        await msg.edit_text(
-            "✅ <b>Farming Selesai!</b>\n\n"
-            "Akun Muse.ai berhasil dibuat. Cek console Railway untuk melihat detail email/password.", 
-            parse_mode="HTML"
-        )
+        # Ekstrak Email & Password dari Log
+        email_match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', full_text)
+        pass_match = re.search(r'(?:pass|password|pwd)[\s:=]+([^\s,]+)', full_text, re.IGNORECASE)
+        
+        if email_match:
+            email = email_match.group(1)
+            password = pass_match.group(1) if pass_match else "Cek log di bawah"
+            
+            success_msg = (
+                f"✅ <b>Akun Muse.ai Berhasil Dibuat!</b>\n\n"
+                f"📧 <b>Email:</b> <code>{email}</code>\n"
+                f"🔑 <b>Password:</b> <code>{password}</code>\n\n"
+                f"<i>Gunakan kredensial di atas untuk login ke muse.ai</i>"
+            )
+            await msg.edit_text(success_msg, parse_mode="HTML")
+        else:
+            # Jika regex gagal, tampilkan 15 baris terakhir
+            last_logs = "\n".join(full_logs[-15:])
+            await msg.edit_text(
+                f"✅ <b>Farming Selesai!</b> (Tapi format email tidak terdeteksi otomatis)\n\n"
+                f"<b>Log Akhir:</b>\n<code>{last_logs}</code>", 
+                parse_mode="HTML"
+            )
     else:
-        error_logs = "\n".join([f"• {l}" for l in log_buffer[-5:]])
+        # Tampilkan error
+        error_logs = "\n".join(full_logs[-10:])
         await msg.edit_text(
             f"❌ <b>Farming Gagal!</b> (Exit code: {rc})\n\n"
-            f"<b>Log Terakhir:</b>\n<code>{error_logs}</code>", 
+            f"<b>Log Error:</b>\n<code>{error_logs}</code>", 
             parse_mode="HTML"
         )
 
 def main():
     app = Application.builder().token(TOKEN).build()
-    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("farm", farm))
-    
     print("Bot Telegram berjalan...")
     app.run_polling(drop_pending_updates=True)
 
