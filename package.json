@@ -1,8 +1,16 @@
 {
   "name": "muse-ai-automation",
   "version": "1.1.0",
+  "description": "Bulk Muse.ai account provisioning",
   "main": "scripts/launch_profile.js",
+  "scripts": {
+    "start": "node scripts/launch_profile.js"
+  },
   "dependencies": {
-    "puppeteer": "^21.5.2"
+    "puppeteer": "^21.11.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "https-proxy-agent": "^7.0.2",
+    "axios": "^1.6.8"
   }
 }
