@@ -1,4 +1,3 @@
-
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
@@ -28,73 +27,97 @@ function getRandomProxy() {
         const parts = rawProxy.split(':');
         
         if (parts.length === 4) {
-            console.log(`[NODE] Memilih Proxy Auth: ${parts[0]}:${parts[1]}`);
             return `http://${parts[2]}:${parts[3]}@${parts[0]}:${parts[1]}`;
         } else if (parts.length === 2) {
-            console.log(`[NODE] Memilih Proxy No-Auth: ${parts[0]}:${parts[1]}`);
             return `http://${parts[0]}:${parts[1]}`;
         }
         return `http://${rawProxy}`;
     } catch (e) {
-        console.log(`[NODE] Error baca proxy: ${e.message}`);
         return null;
     }
 }
 
 (async () => {
-    const proxyUrl = getRandomProxy();
+    let success = false;
+    let attempts = 0;
+    let browser = null;
     let anonymizedProxyUrl = null;
-    
-    let args = [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--window-size=1920,1080',
-        `--remote-debugging-port=${CDP_PORT}`
-    ];
 
-    if (proxyUrl) {
-        try {
-            // 🔥 KUNCI PERBAIKAN: Buat proxy lokal tanpa password (bypass auth)
-            anonymizedProxyUrl = await proxyChain.anonymizeProxy(proxyUrl);
-            console.log(`[NODE] Proxy lokal (anonymized) siap: ${anonymizedProxyUrl}`);
-            args.push(`--proxy-server=${anonymizedProxyUrl}`);
-        } catch (error) {
-            console.error(`[NODE] Gagal membuat proxy-chain: ${error.message}`);
-        }
-    }
-
-    try {
-        console.log(`[NODE] Menyalakan Chromium...`);
-        const browser = await puppeteer.launch({
-            headless: HEADLESS ? 'new' : false,
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-            args: args,
-            userDataDir: USER_DATA_DIR,
-            ignoreHTTPSErrors: true,
-            defaultViewport: null
-        });
-
-        console.log(`[NODE] Browser berhasil menyala! CDP aktif di port ${CDP_PORT}`);
+    // Maksimal coba 15 proxy berbeda
+    while (!success && attempts < 15) {
+        attempts++;
+        const proxyUrl = getRandomProxy();
+        anonymizedProxyUrl = null;
         
-        // Pembersihan saat browser ditutup
-        const cleanup = async () => {
-            await browser.close();
+        let args = [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--window-size=1920,1080',
+            `--remote-debugging-port=${CDP_PORT}`
+        ];
+
+        if (proxyUrl) {
+            try {
+                anonymizedProxyUrl = await proxyChain.anonymizeProxy(proxyUrl);
+                args.push(`--proxy-server=${anonymizedProxyUrl}`);
+                console.log(`[NODE] Percobaan ${attempts}: Menggunakan proxy lokal -> ${anonymizedProxyUrl}`);
+            } catch (error) {
+                console.error(`[NODE] Gagal buat proxy-chain: ${error.message}`);
+                continue;
+            }
+        }
+
+        try {
+            console.log(`[NODE] Menyalakan Chromium...`);
+            browser = await puppeteer.launch({
+                headless: HEADLESS ? 'new' : false,
+                executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
+                args: args,
+                userDataDir: USER_DATA_DIR,
+                ignoreHTTPSErrors: true,
+                defaultViewport: null
+            });
+
+            // TEST PROXY: Coba buka Muse.ai sebelum diserahkan ke Python
+            console.log(`[NODE] Mengetes koneksi ke muse.ai/join...`);
+            const page = await browser.newPage();
+            await page.goto('https://muse.ai/join', { waitUntil: 'domcontentloaded', timeout: 20000 });
+            
+            // Jika berhasil sampai sini tanpa timeout, berarti proxy HIDUP!
+            console.log(`[NODE] Proxy HIDUP! Halaman Muse.ai berhasil dimuat.`);
+            success = true;
+
+        } catch (error) {
+            console.error(`[NODE] Proxy MATI (Gagal load halaman): ${error.message}`);
+            console.log(`[NODE] Membuang proxy ini dan mencoba yang lain...`);
+            
+            if (browser) {
+                await browser.close();
+                browser = null;
+            }
             if (anonymizedProxyUrl) {
                 await proxyChain.closeAnonymizedProxy(anonymizedProxyUrl, true);
             }
-            process.exit(0);
-        };
-
-        process.on('SIGINT', cleanup);
-        process.on('SIGTERM', cleanup);
-
-    } catch (error) {
-        console.error(`[NODE] GAGAL MENYALAKAN BROWSER: ${error.message}`);
-        if (anonymizedProxyUrl) {
-            await proxyChain.closeAnonymizedProxy(anonymizedProxyUrl, true);
         }
+    }
+
+    if (!success) {
+        console.error(`[NODE] GAGAL TOTAL: Sudah mencoba 15 proxy tapi semuanya mati.`);
         process.exit(1);
     }
+
+    // Jika sukses, biarkan browser tetap hidup untuk diambil alih oleh Python
+    console.log(`[NODE] Browser siap digunakan oleh Python. CDP aktif di port ${CDP_PORT}`);
+    
+    const cleanup = async () => {
+        if (browser) await browser.close();
+        if (anonymizedProxyUrl) await proxyChain.closeAnonymizedProxy(anonymizedProxyUrl, true);
+        process.exit(0);
+    };
+
+    process.on('SIGINT', cleanup);
+    process.on('SIGTERM', cleanup);
+
 })();
