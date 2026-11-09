@@ -1,0 +1,10 @@
+[phases.setup]
+# Memaksa Railway menginstal Node.js dan Python sekaligus
+nixPkgs = ["nodejs_18", "python311", "python311Packages.pip"]
+
+[phases.install]
+# Instal dependensi JS (CloakBrowser) dan dependensi Python
+cmds = ["npm install", "pip install -r requirements.txt"]
+
+[start]
+cmd = "python telegram_bot.py"
