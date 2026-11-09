@@ -1,19 +1,10 @@
 {
   "name": "muse-ai-automation",
-  "version": "1.1.0",
-  "description": "Bulk Muse.ai account provisioning: disposable mail.tm inboxes, CloakBrowser fingerprint, residential proxy bridge, invite redemption, credential ledger.",
+  "version": "1.0.0",
+  "description": "",
   "main": "scripts/launch_profile.js",
-  "scripts": {
-    "start": "node scripts/launch_profile.js"
-  },
-  "keywords": [
-    "muse-ai",
-    "account-farming",
-    "automation",
-    "stealth",
-    "anti-detect",
-    "playwright"
-  ],
-  "author": "0xceneor",
-  "license": "MIT"
+  "dependencies": {
+    "cloakbrowser": "^1.0.0",
+    "puppeteer-core": "^21.0.0"
+  }
 }
