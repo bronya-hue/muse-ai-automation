@@ -41,8 +41,8 @@ def take_status_snapshot(page: Page, filename: str):
 # ==========================================
 # DATA NAMA ACAK UNTUK AKUN META
 # ==========================================
-FIRST_NAMES = ["James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas", "Charles"]
-LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez"]
+FIRST_NAMES = ["James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas", "Charles", "Kevin", "Brian", "Jason", "Eric"]
+LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez", "Wilson", "Anderson", "Taylor"]
 
 def get_random_name():
     return random.choice(FIRST_NAMES), random.choice(LAST_NAMES)
@@ -58,8 +58,7 @@ def screen_of(page: Page) -> str:
     
     content = page.content().lower()
     
-    # 🔥 DETEKSI FORM META BARU (Nama Depan, Belakang, Tanggal)
-    if "selesaikan pembuatan akun" in content or "nama depan" in content or "nama belakang" in content:
+    if "selesaikan pembuatan akun" in content or "nama depan" in content or "nama belakang" in content or "complete your account" in content:
         return "meta_signup"
     
     if "add a payment method" in content or "credit card" in content or "card number" in content:
@@ -77,47 +76,73 @@ def screen_of(page: Page) -> str:
 # AKSI-AKSI OTOMASI (HANDLERS)
 # ==========================================
 def do_meta_signup(page: Page):
-    """Mengisi form pembuatan akun Meta (Nama Depan, Belakang, Tanggal Lahir)"""
-    log("Mengisi form pembuatan akun Meta (Nama & Tanggal Lahir)...")
+    """Mengisi form pembuatan akun Meta dengan metode paksa (fill)"""
+    log("Mengisi form Meta (Nama & Tanggal Lahir) dengan metode paksa...")
     dismiss_dialog(page)
     
     first_name, last_name = get_random_name()
     
     try:
-        # Isi Nama Depan
-        fn_input = page.locator('input[placeholder="Nama depan"], input[name="firstname"], input[name="first_name"]').first
+        # 1. Isi Nama Depan (Pakai .fill() agar React mendeteksi)
+        fn_input = page.locator('input[placeholder*="depan" i], input[name="firstname"], input[name="first_name"]').first
         if fn_input.count() > 0 and fn_input.is_visible():
-            type_verified(page, fn_input, first_name)
+            fn_input.fill(first_name)
+            log(f"Nama depan diisi: {first_name}")
+            time.sleep(1)
             
-        # Isi Nama Belakang
-        ln_input = page.locator('input[placeholder="Nama belakang"], input[name="lastname"], input[name="last_name"]').first
+        # 2. Isi Nama Belakang
+        ln_input = page.locator('input[placeholder*="belakang" i], input[name="lastname"], input[name="last_name"]').first
         if ln_input.count() > 0 and ln_input.is_visible():
-            type_verified(page, ln_input, last_name)
+            ln_input.fill(last_name)
+            log(f"Nama belakang diisi: {last_name}")
+            time.sleep(1)
             
-        # Isi Tanggal Lahir (Format biasanya YYYY-MM-DD atau DD-MM-YYYY)
-        # Gunakan tahun 1995-2000 agar aman dari "underage"
-        dob_input = page.locator('input[placeholder="Tanggal"], input[type="date"], input[name="birthday"]').first
+        # 3. Isi Tanggal Lahir
+        dob_input = page.locator('input[placeholder*="Tanggal" i], input[name="birthday"], input[type="date"]').first
         if dob_input.count() > 0 and dob_input.is_visible():
-            # Set nilai langsung lewat JS jika input tipe date, atau ketik manual
-            dob = f"{random.randint(1, 12):02d}/{random.randint(1, 28):02d}/{random.randint(1995, 2000)}"
-            type_verified(page, dob_input, dob)
-            # Jika datepicker muncul, klik enter atau pilih tanggal
+            # Klik dulu agar datepicker muncul
+            dob_input.click()
+            time.sleep(1)
+            
+            # Ketik format tanggal (coba DD/MM/YYYY)
+            dob_str = f"{random.randint(1, 28):02d}/{random.randint(1, 12):02d}/{random.randint(1995, 2000)}"
+            page.keyboard.type(dob_str, delay=100)
+            time.sleep(1)
+            
+            # Tekan Enter atau Tab untuk menutup datepicker
             page.keyboard.press("Enter")
             time.sleep(1)
+            
+            # Jika masih kosong, coba ketik format YYYY-MM-DD
+            val = dob_input.input_value()
+            if not val or len(val) < 5:
+                dob_input.fill(f"{random.randint(1995, 2000)}-{random.randint(1, 12):02d}-{random.randint(1, 28):02d}")
+                log("Menggunakan format YYYY-MM-DD")
+            log("Tanggal lahir diisi.")
+            time.sleep(1)
 
-        # Klik tombol Konfirmasi
+        # 4. Tunggu tombol Konfirmasi menyala (tidak disabled)
         submit_btn = page.locator('button:has-text("Konfirmasi"), button:has-text("Confirm"), button[type="submit"]').first
+        log("Menunggu tombol Konfirmasi aktif...")
+        
+        # Looping maksimal 10 detik untuk nunggu tombolnya nyala
+        for _ in range(10):
+            if submit_btn.is_visible() and submit_btn.is_enabled():
+                break
+            time.sleep(1)
+            
         if submit_btn.is_visible():
             log("Mengklik tombol Konfirmasi...")
             submit_btn.click(force=True)
+        else:
+            log("⚠️ Tombol Konfirmasi tidak ditemukan.")
         
         time.sleep(5) # Tunggu loading setelah submit
     except Exception as e:
         log(f"Error di do_meta_signup: {e}")
 
 def do_birthday(page: Page):
-    """Fungsi lama untuk mengisi tanggal lahir jika terpisah"""
-    log("Mengisi tanggal lahir...")
+    log("Mengisi tanggal lahir (form terpisah)...")
     dismiss_dialog(page)
     try:
         month_input = page.locator('select[name="month"], input[name="month"]').first
