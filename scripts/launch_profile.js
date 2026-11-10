@@ -43,7 +43,6 @@ function getRandomProxy() {
     let browser = null;
     let anonymizedProxyUrl = null;
 
-    // Maksimal coba 15 proxy berbeda
     while (!success && attempts < 15) {
         attempts++;
         const proxyUrl = getRandomProxy();
@@ -55,6 +54,7 @@ function getRandomProxy() {
             '--disable-dev-shm-usage',
             '--disable-gpu',
             '--window-size=1920,1080',
+            '--disable-software-rasterizer', // Tambahan untuk hemat RAM
             `--remote-debugging-port=${CDP_PORT}`
         ];
 
@@ -80,18 +80,15 @@ function getRandomProxy() {
                 defaultViewport: null
             });
 
-            // TEST PROXY: Coba buka Muse.ai sebelum diserahkan ke Python
             console.log(`[NODE] Mengetes koneksi ke muse.ai/join...`);
             const page = await browser.newPage();
             await page.goto('https://muse.ai/join', { waitUntil: 'domcontentloaded', timeout: 20000 });
             
-            // Jika berhasil sampai sini tanpa timeout, berarti proxy HIDUP!
             console.log(`[NODE] Proxy HIDUP! Halaman Muse.ai berhasil dimuat.`);
             success = true;
 
         } catch (error) {
             console.error(`[NODE] Proxy MATI (Gagal load halaman): ${error.message}`);
-            console.log(`[NODE] Membuang proxy ini dan mencoba yang lain...`);
             
             if (browser) {
                 await browser.close();
@@ -108,10 +105,17 @@ function getRandomProxy() {
         process.exit(1);
     }
 
-    // Jika sukses, biarkan browser tetap hidup untuk diambil alih oleh Python
     console.log(`[NODE] Browser siap digunakan oleh Python. CDP aktif di port ${CDP_PORT}`);
     
+    // 🔥 KUNCI PERBAIKAN: setInterval menahan Node.js agar tidak mati
+    // selama Python (muse_bot.py) masih menggunakannya.
+    const keepAlive = setInterval(() => {
+        // Proses idle untuk menahan browser tetap hidup
+    }, 10000);
+
     const cleanup = async () => {
+        console.log(`[NODE] Menerima sinyal berhenti. Menutup browser...`);
+        clearInterval(keepAlive);
         if (browser) await browser.close();
         if (anonymizedProxyUrl) await proxyChain.closeAnonymizedProxy(anonymizedProxyUrl, true);
         process.exit(0);
