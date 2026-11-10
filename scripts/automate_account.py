@@ -8,12 +8,6 @@ from playwright.sync_api import Page
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
-def wait_hydrated(page: Page, selector: str, timeout: int = 15):
-    try:
-        page.wait_for_selector(selector, state="visible", timeout=timeout * 1000)
-    except Exception:
-        pass
-
 def type_verified(page: Page, element, text: str):
     element.click()
     time.sleep(0.2)
@@ -39,20 +33,19 @@ def take_status_snapshot(page: Page, filename: str):
         log(f"Gagal mengambil screenshot: {e}")
 
 # ==========================================
-# DATA NAMA ACAK UNTUK AKUN META
+# DATA NAMA ACAK
 # ==========================================
-FIRST_NAMES = ["James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas", "Charles", "Kevin", "Brian", "Jason", "Eric"]
-LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez", "Wilson", "Anderson", "Taylor"]
+FIRST_NAMES = ["James", "John", "Robert", "Michael", "William", "David", "Kevin", "Brian", "Jason", "Eric"]
+LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Wilson", "Anderson"]
 
 def get_random_name():
     return random.choice(FIRST_NAMES), random.choice(LAST_NAMES)
 
 # ==========================================
-# DETEKSI SCREEN (STATE MACHINE)
+# DETEKSI SCREEN
 # ==========================================
 def screen_of(page: Page) -> str:
     url = page.url.lower()
-    
     if "workspace" in url or "dashboard" in url:
         return "workspace"
     
@@ -73,71 +66,89 @@ def screen_of(page: Page) -> str:
     return "unknown"
 
 # ==========================================
-# AKSI-AKSI OTOMASI (HANDLERS)
+# JS INJECTION UNTUK REACT (SANGAT AGRESIF)
 # ==========================================
 def do_meta_signup(page: Page):
-    """Mengisi form pembuatan akun Meta dengan metode paksa (fill)"""
-    log("Mengisi form Meta (Nama & Tanggal Lahir) dengan metode paksa...")
+    log("Mengisi form Meta (Nama & Tanggal) via JS Injection...")
     dismiss_dialog(page)
     
     first_name, last_name = get_random_name()
+    # Buat tanggal lahir acak (Tahun 1995-2000)
+    dob = f"{random.randint(1, 28):02d}/{random.randint(1, 12):02d}/{random.randint(1995, 2000)}"
+
+    # Script JS untuk memaksa React mendeteksi inputan
+    js_script = """
+    (args) => {
+        const fn = args.fn, ln = args.ln, dob = args.dob;
+        const inputs = Array.from(document.querySelectorAll('input'));
+        
+        const setNativeValue = (element, value) => {
+            const valueSetter = Object.getOwnPropertyDescriptor(element, 'value').set;
+            const prototype = Object.getPrototypeOf(element);
+            const prototypeValueSetter = Object.getOwnPropertyDescriptor(prototype, 'value').set;
+            if (valueSetter && valueSetter !== prototypeValueSetter) {
+                prototypeValueSetter.call(element, value);
+            } else {
+                valueSetter.call(element, value);
+            }
+        };
+
+        let fnInput = inputs.find(i => (i.placeholder||'').toLowerCase().includes('depan') || (i.placeholder||'').toLowerCase().includes('first'));
+        let lnInput = inputs.find(i => (i.placeholder||'').toLowerCase().includes('belakang') || (i.placeholder||'').toLowerCase().includes('last'));
+        let dobInput = inputs.find(i => (i.placeholder||'').toLowerCase().includes('tanggal') || (i.placeholder||'').toLowerCase().includes('date'));
+
+        if(fnInput) { 
+            setNativeValue(fnInput, fn); 
+            fnInput.dispatchEvent(new Event('input', { bubbles: true })); 
+            fnInput.dispatchEvent(new Event('change', { bubbles: true })); 
+        }
+        if(lnInput) { 
+            setNativeValue(lnInput, ln); 
+            lnInput.dispatchEvent(new Event('input', { bubbles: true })); 
+            lnInput.dispatchEvent(new Event('change', { bubbles: true })); 
+        }
+        if(dobInput) { 
+            setNativeValue(dobInput, dob); 
+            dobInput.dispatchEvent(new Event('input', { bubbles: true })); 
+            dobInput.dispatchEvent(new Event('change', { bubbles: true })); 
+            dobInput.dispatchEvent(new Event('blur', { bubbles: true })); 
+        }
+
+        return { fn: !!fnInput, ln: !!lnInput, dob: !!dobInput };
+    }
+    """
     
     try:
-        # 1. Isi Nama Depan (Pakai .fill() agar React mendeteksi)
-        fn_input = page.locator('input[placeholder*="depan" i], input[name="firstname"], input[name="first_name"]').first
-        if fn_input.count() > 0 and fn_input.is_visible():
-            fn_input.fill(first_name)
-            log(f"Nama depan diisi: {first_name}")
-            time.sleep(1)
-            
-        # 2. Isi Nama Belakang
-        ln_input = page.locator('input[placeholder*="belakang" i], input[name="lastname"], input[name="last_name"]').first
-        if ln_input.count() > 0 and ln_input.is_visible():
-            ln_input.fill(last_name)
-            log(f"Nama belakang diisi: {last_name}")
-            time.sleep(1)
-            
-        # 3. Isi Tanggal Lahir
-        dob_input = page.locator('input[placeholder*="Tanggal" i], input[name="birthday"], input[type="date"]').first
-        if dob_input.count() > 0 and dob_input.is_visible():
-            # Klik dulu agar datepicker muncul
-            dob_input.click()
-            time.sleep(1)
-            
-            # Ketik format tanggal (coba DD/MM/YYYY)
-            dob_str = f"{random.randint(1, 28):02d}/{random.randint(1, 12):02d}/{random.randint(1995, 2000)}"
-            page.keyboard.type(dob_str, delay=100)
-            time.sleep(1)
-            
-            # Tekan Enter atau Tab untuk menutup datepicker
-            page.keyboard.press("Enter")
-            time.sleep(1)
-            
-            # Jika masih kosong, coba ketik format YYYY-MM-DD
-            val = dob_input.input_value()
-            if not val or len(val) < 5:
-                dob_input.fill(f"{random.randint(1995, 2000)}-{random.randint(1, 12):02d}-{random.randint(1, 28):02d}")
-                log("Menggunakan format YYYY-MM-DD")
-            log("Tanggal lahir diisi.")
-            time.sleep(1)
+        # Jalankan JS Injection
+        result = page.evaluate(js_script, {"fn": first_name, "ln": last_name, "dob": dob})
+        log(f"Status Pengisian: Nama Depan={result['fn']}, Nama Belakang={result['ln']}, Tanggal={result['dob']}")
+        time.sleep(2)
 
-        # 4. Tunggu tombol Konfirmasi menyala (tidak disabled)
+        # Cari tombol Konfirmasi
         submit_btn = page.locator('button:has-text("Konfirmasi"), button:has-text("Confirm"), button[type="submit"]').first
-        log("Menunggu tombol Konfirmasi aktif...")
         
-        # Looping maksimal 10 detik untuk nunggu tombolnya nyala
-        for _ in range(10):
-            if submit_btn.is_visible() and submit_btn.is_enabled():
-                break
-            time.sleep(1)
+        if submit_btn.count() > 0 and submit_btn.is_visible():
+            # Cek apakah tombol masih disabled
+            is_disabled = submit_btn.evaluate("el => el.disabled || el.getAttribute('aria-disabled') === 'true'")
             
-        if submit_btn.is_visible():
-            log("Mengklik tombol Konfirmasi...")
-            submit_btn.click(force=True)
+            if is_disabled:
+                log("⚠️ Tombol Konfirmasi masih disabled. Mencoba memaksa klik via JS...")
+                # Paksa klik lewat JS
+                page.evaluate("""() => {
+                    const btn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('Konfirmasi') || b.innerText.includes('Confirm'));
+                    if (btn) {
+                        btn.removeAttribute('disabled');
+                        btn.removeAttribute('aria-disabled');
+                        btn.click();
+                    }
+                }""")
+            else:
+                log("✅ Tombol Konfirmasi sudah aktif. Mengklik...")
+                submit_btn.click(force=True)
         else:
-            log("⚠️ Tombol Konfirmasi tidak ditemukan.")
-        
-        time.sleep(5) # Tunggu loading setelah submit
+            log("❌ Tombol Konfirmasi tidak ditemukan di layar.")
+
+        time.sleep(5) # Tunggu proses Meta
     except Exception as e:
         log(f"Error di do_meta_signup: {e}")
 
