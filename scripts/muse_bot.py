@@ -4,7 +4,6 @@ import time
 import random
 import csv
 import argparse
-import re
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 ROOT = os.getcwd()
@@ -23,6 +22,7 @@ from automate_account import run_all_after_email, type_verified, log
 INVITE_CODE = os.getenv("INVITE_CODE", "")
 
 def save_to_ledger(email, password):
+    """Menyimpan akun yang berhasil dibuat ke accounts.csv"""
     file_path = os.path.join(ROOT, "accounts.csv")
     file_exists = os.path.isfile(file_path)
     try:
@@ -36,12 +36,10 @@ def save_to_ledger(email, password):
         log(f"❌ Gagal simpan ke ledger: {e}")
 
 def wait_and_find_email_input(page, timeout=45):
-    """Mencari form email dengan SABAR (looping), termasuk ngecek iframe & klik tombol alternatif."""
     log("Mencari form email (sabar menunggu render hingga 45 detik)...")
     start_time = time.time()
     
     while time.time() - start_time < timeout:
-        # 1. Cek di halaman utama
         for sel in ['input[type="email"]', 'input[name="email"]', 'input[placeholder*="email" i]', 'input[autocomplete="email"]']:
             try:
                 loc = page.locator(sel).first
@@ -51,7 +49,6 @@ def wait_and_find_email_input(page, timeout=45):
             except Exception:
                 pass
                 
-        # 2. Cek di dalam iframe (jika ada)
         for frame in page.frames:
             if frame == page.main_frame:
                 continue
@@ -64,7 +61,6 @@ def wait_and_find_email_input(page, timeout=45):
                 except Exception:
                     pass
 
-        # 3. Kalau belum ketemu, coba cari tombol alternatif (misal "Email") dan klik
         alt_buttons = [
             'button:has-text("Sign up with email")',
             'button:has-text("Continue with email")',
@@ -77,22 +73,22 @@ def wait_and_find_email_input(page, timeout=45):
                 if btn.count() > 0 and btn.is_visible():
                     log(f"Menemukan tombol alternatif: '{btn_sel}'. Mencoba klik...")
                     btn.click(force=True, timeout=3000)
-                    time.sleep(2) # Tunggu transisi
+                    time.sleep(2)
                     break
             except Exception:
                 pass
                 
-        time.sleep(2) # Jeda sebelum loop berikutnya
+        time.sleep(2)
         
     return None
 
 def create_full_account():
     log("Menyiapkan inbox email...")
     try:
-        email, inbox_token = create_inbox()
-        password = f"muse_{random.randint(100000, 999999)}_{random.randint(1000, 9999)}"
+        # 🔥 PERBAIKAN: Tangkap password asli dari create_inbox
+        email, inbox_token, real_password = create_inbox()
         log(f"[*] Email : {email}")
-        log(f"[*] Password : {password}")
+        log(f"[*] Password (Asli) : {real_password}")
     except Exception as e:
         log(f"❌ Gagal buat inbox: {e}")
         return None
@@ -118,24 +114,17 @@ def create_full_account():
 
             if not email_input:
                 log("❌ Tetap nggak nemu form email setelah menunggu 45 detik.")
-                log("⚠️ Mengambil screenshot untuk melihat layar sebenarnya...")
-                path_ss = os.path.join(ROOT, "artifacts", "gagal_nemu_form.png")
-                page.screenshot(path=path_ss, full_page=True)
-                log(f"📸 Screenshot disimpan di: {path_ss}")
-                log("Silakan cek file tersebut di repo Anda. Kemungkinan ada Captcha atau tampilan berubah.")
+                page.screenshot(path=os.path.join(ROOT, "artifacts", "gagal_nemu_form.png"), full_page=True)
                 return None
 
-            # Isi email
             log(f"Mengisi email: {email}")
             type_verified(page, email_input, email)
             time.sleep(1)
 
-            # Klik lanjut
             log("Mengklik tombol Continue...")
             submit_btn = page.locator('button:has-text("Continue"), button[type="submit"]').first
             submit_btn.click(force=True)
             
-            # Tunggu OTP
             log("Menunggu form OTP (20 detik)...")
             otp_selector = 'input[autocomplete="one-time-code"], input[name="code"], input[placeholder*="code" i]'
             try:
@@ -144,7 +133,7 @@ def create_full_account():
                 
                 otp = fetch_otp(inbox_token)
                 if not otp:
-                    log("❌ Gagal dapet OTP dari email (email tidak masuk).")
+                    log("❌ Gagal dapet OTP dari email.")
                     return None
                 
                 log(f"Kode OTP: {otp}")
@@ -154,16 +143,16 @@ def create_full_account():
                 page.locator('button:has-text("Continue"), button[type="submit"]').first.click(force=True)
                 time.sleep(3)
             except PlaywrightTimeoutError:
-                log("Form OTP nggak muncul, lanjut ke step berikutnya (mungkin langsung minta umur).")
+                log("Form OTP nggak muncul, lanjut ke step berikutnya.")
 
-            # Lanjut ke automate_account (isi umur -> skip kartu)
             log("Menjalankan otomasi lanjutan (Birthday -> Skip Card)...")
             success = run_all_after_email(page, browser, INVITE_CODE)
             
             if success:
-                save_to_ledger(email, password)
+                # Simpan password asli ke database
+                save_to_ledger(email, real_password)
                 log("🎉 AKUN BERHASIL DIBUAT!")
-                return {"email": email, "password": password}
+                return {"email": email, "password": real_password}
             else:
                 log("❌ Pipeline gagal (kena CARD/403).")
                 return None
