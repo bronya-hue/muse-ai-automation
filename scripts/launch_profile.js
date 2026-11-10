@@ -18,19 +18,11 @@ if (!fs.existsSync(path.dirname(USER_DATA_DIR))) {
 function getRandomProxy() {
     try {
         const proxyFile = path.join(__dirname, '../proxies.txt');
-        if (!fs.existsSync(proxyFile)) {
-            console.log("[NODE] proxies.txt tidak ditemukan, jalan tanpa proxy.");
-            return null;
-        }
+        if (!fs.existsSync(proxyFile)) return null;
         
-        const allProxies = fs.readFileSync(proxyFile, 'utf8')
-            .split('\n')
-            .map(p => p.trim())
-            .filter(p => p.length > 0);
-        
+        const allProxies = fs.readFileSync(proxyFile, 'utf8').split('\n').map(p => p.trim()).filter(p => p);
         if (allProxies.length === 0) return null;
 
-        // 🔥 FILTER: Prioritas proxy dengan kode negara Jepang (JP)
         const jpProxies = allProxies.filter(p => 
             p.toLowerCase().includes('-jp') || 
             p.toLowerCase().includes('country-jp') ||
@@ -40,26 +32,21 @@ function getRandomProxy() {
         let selectedProxy;
         if (jpProxies.length > 0) {
             selectedProxy = jpProxies[Math.floor(Math.random() * jpProxies.length)];
-            console.log(`[NODE] Memilih Proxy JEPANG (${jpProxies.length} tersedia dari total ${allProxies.length}): ${selectedProxy.split(':')[0]}:${selectedProxy.split(':')[1]}`);
+            console.log(`[NODE] Memilih Proxy JEPANG: ${selectedProxy.split(':')[0]}`);
         } else {
-            console.log(`[NODE] ⚠️ TIDAK ADA proxy JP di proxies.txt. Menggunakan proxy acak. Verifikasi kartu kemungkinan besar akan muncul.`);
+            console.log(`[NODE] ⚠️ Tidak ada proxy JP. Menggunakan acak.`);
             selectedProxy = allProxies[Math.floor(Math.random() * allProxies.length)];
         }
         
         const parts = selectedProxy.split(':');
-        if (parts.length === 4) {
-            return `http://${parts[2]}:${parts[3]}@${parts[0]}:${parts[1]}`;
-        } else if (parts.length === 2) {
-            return `http://${parts[0]}:${parts[1]}`;
-        }
+        if (parts.length === 4) return `http://${parts[2]}:${parts[3]}@${parts[0]}:${parts[1]}`;
+        if (parts.length === 2) return `http://${parts[0]}:${parts[1]}`;
         return `http://${selectedProxy}`;
     } catch (e) {
-        console.log(`[NODE] Error baca proxy: ${e.message}`);
         return null;
     }
 }
 
-// ... (sisa kode di bawah ini sama persis dengan yang sebelumnya)
 (async () => {
     let success = false;
     let attempts = 0;
@@ -71,9 +58,16 @@ function getRandomProxy() {
         const proxyUrl = getRandomProxy();
         anonymizedProxyUrl = null;
         
+        // 🔥 KUNCI HEMAT RAM (Mencegah Chromium dibunuh oleh sistem Railway)
         let args = [
-            '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-            '--disable-gpu', '--window-size=1920,1080', '--disable-software-rasterizer',
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--disable-software-rasterizer',
+            '--single-process',    // Paksa jalan di 1 proses (hemat RAM)
+            '--no-zygote',         // Matikan zygote process
+            '--js-flags="--max-old-space-size=256"', // Batasi memori V8
             `--remote-debugging-port=${CDP_PORT}`
         ];
 
@@ -82,7 +76,6 @@ function getRandomProxy() {
                 anonymizedProxyUrl = await proxyChain.anonymizeProxy(proxyUrl);
                 args.push(`--proxy-server=${anonymizedProxyUrl}`);
             } catch (error) {
-                console.error(`[NODE] Gagal buat proxy-chain: ${error.message}`);
                 continue;
             }
         }
@@ -104,19 +97,20 @@ function getRandomProxy() {
             success = true;
 
         } catch (error) {
-            console.error(`[NODE] Proxy MATI (Gagal load halaman): ${error.message}`);
+            console.log(`[NODE] Proxy MATI: ${error.message}`);
             if (browser) { await browser.close(); browser = null; }
             if (anonymizedProxyUrl) { await proxyChain.closeAnonymizedProxy(anonymizedProxyUrl, true); }
         }
     }
 
     if (!success) {
-        console.error(`[NODE] GAGAL TOTAL: Sudah mencoba 15 proxy tapi semuanya mati.`);
+        console.error(`[NODE] GAGAL TOTAL: Semua proxy mati.`);
         process.exit(1);
     }
 
     console.log(`[NODE] Browser siap digunakan oleh Python. CDP aktif di port ${CDP_PORT}`);
     
+    // Tahan Node.js agar tidak mati selama Python bekerja
     const keepAlive = setInterval(() => {}, 10000);
     const cleanup = async () => {
         clearInterval(keepAlive);
