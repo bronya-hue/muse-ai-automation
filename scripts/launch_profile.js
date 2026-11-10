@@ -1,121 +1,92 @@
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-const fs = require('fs');
-const path = require('path');
-const proxyChain = require('proxy-chain');
+"""Single-account end-to-end runner with live streamed output."""
+import os, sys, time, subprocess, urllib.request
 
-puppeteer.use(StealthPlugin());
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-const CDP_PORT = process.env.CDP_PORT || 9222;
-const HEADLESS = process.env.HEADLESS === '0' ? false : true;
-const PROFILE_NAME = process.env.PROFILE_NAME || `muse_${Date.now()}`;
-const USER_DATA_DIR = path.join(__dirname, `../tmp_profiles/${PROFILE_NAME}`);
+ROOT = os.getcwd()
+SCRIPTS = os.path.join(ROOT, "scripts")
+sys.path.insert(0, SCRIPTS)
 
-if (!fs.existsSync(path.dirname(USER_DATA_DIR))) {
-    fs.mkdirSync(path.dirname(USER_DATA_DIR), { recursive: true });
-}
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(ROOT, ".env"))
+except ImportError:
+    pass
 
-function getRandomProxy() {
-    try {
-        const proxyFile = path.join(__dirname, '../proxies.txt');
-        if (!fs.existsSync(proxyFile)) return null;
-        
-        const allProxies = fs.readFileSync(proxyFile, 'utf8').split('\n').map(p => p.trim()).filter(p => p);
-        if (allProxies.length === 0) return null;
+def log(msg: str):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
-        const selectedProxy = allProxies[Math.floor(Math.random() * allProxies.length)];
-        const parts = selectedProxy.split(':');
-        
-        if (parts.length === 4) {
-            // Format standar FloppyData: host:port:user:pass
-            // Jika Anda ingin mencoba memaksa negara lain, ubah user di sini
-            // Contoh: user = parts[2] + "-country-sg";
-            let user = parts[2]; 
-            return `http://${user}:${parts[3]}@${parts[0]}:${parts[1]}`;
-        }
-        return `http://${selectedProxy}`;
-    } catch (e) {
-        return null;
-    }
-}
+def cdp_ready(port: int, timeout: int = 30) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=2) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            time.sleep(0.5)
+    return False
 
-(async () => {
-    let success = false;
-    let attempts = 0;
-    let browser = null;
-    let anonymizedProxyUrl = null;
+def run_one(headless: bool = True):
+    import secrets, random
+    port = 9222
+    env = dict(os.environ)
+    env["CDP_URL"] = f"http://127.0.0.1:{port}"
+    env["CDP_PORT"] = str(port)
+    env["PROFILE_NAME"] = f"muse_{secrets.token_hex(4)}"
+    env["FINGERPRINT"] = str(random.randint(100000, 999999))
+    env["HEADLESS"] = "1" if headless else "0"
 
-    const iphoneUserAgent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1';
-
-    while (!success && attempts < 10) {
-        attempts++;
-        const proxyUrl = getRandomProxy();
-        anonymizedProxyUrl = null;
-        
-        // Kembali ke argumen standar yang stabil (Hapus --single-process)
-        let args = [
-            '--no-sandbox', 
-            '--disable-setuid-sandbox', 
-            '--disable-dev-shm-usage',
-            '--disable-gpu', 
-            '--disable-software-rasterizer',
-            `--remote-debugging-port=${CDP_PORT}`
-        ];
-
-        if (proxyUrl) {
-            try {
-                anonymizedProxyUrl = await proxyChain.anonymizeProxy(proxyUrl);
-                args.push(`--proxy-server=${anonymizedProxyUrl}`);
-                console.log(`[NODE] Percobaan ${attempts}: Menggunakan proxy lokal...`);
-            } catch (error) {
-                console.log(`[NODE] Gagal buat proxy-chain: ${error.message}`);
-                continue;
-            }
-        }
-
-        try {
-            console.log(`[NODE] Menyalakan Chromium...`);
-            browser = await puppeteer.launch({
-                headless: HEADLESS ? 'new' : false,
-                executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-                args: args,
-                userDataDir: USER_DATA_DIR,
-                ignoreHTTPSErrors: true
-            });
-
-            const page = await browser.newPage();
-            
-            // Emulasi iPhone
-            await page.setUserAgent(iphoneUserAgent);
-            await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
-
-            console.log(`[NODE] Mengetes koneksi ke muse.ai/join...`);
-            await page.goto('https://muse.ai/join', { waitUntil: 'domcontentloaded', timeout: 25000 });
-            
-            console.log(`[NODE] Proxy HIDUP! Halaman Muse.ai berhasil dimuat.`);
-            success = true;
-
-        } catch (error) {
-            console.log(`[NODE] Proxy MATI / Browser Crash: ${error.message}`);
-            if (browser) { await browser.close(); browser = null; }
-            if (anonymizedProxyUrl) { await proxyChain.closeAnonymizedProxy(anonymizedProxyUrl, true); }
-        }
-    }
-
-    if (!success) {
-        console.error(`[NODE] GAGAL TOTAL: Tidak bisa membuka Muse.ai setelah 10 percobaan.`);
-        process.exit(1);
-    }
-
-    console.log(`[NODE] Browser Mobile siap digunakan oleh Python. CDP aktif di port ${CDP_PORT}`);
+    launch_js = os.path.join(SCRIPTS, "launch_profile.js")
+    log(f"Launching CloakBrowser on port {port}...")
     
-    const keepAlive = setInterval(() => {}, 10000);
-    const cleanup = async () => {
-        clearInterval(keepAlive);
-        if (browser) await browser.close();
-        if (anonymizedProxyUrl) await proxyChain.closeAnonymizedProxy(anonymizedProxyUrl, true);
-        process.exit(0);
-    };
-    process.on('SIGINT', cleanup);
-    process.on('SIGTERM', cleanup);
-})();
+    browser_proc = subprocess.Popen(
+        ["node", launch_js], cwd=ROOT, env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace",
+    )
+
+    try:
+        log("Waiting for browser CDP endpoint...")
+        if not cdp_ready(port, timeout=40):
+            log("Browser CDP endpoint timed out!")
+            try:
+                browser_proc.terminate()
+                out, _ = browser_proc.communicate(timeout=5)
+                if out:
+                    log("=== OUTPUT DARI NODE.JS ===")
+                    for line in out.splitlines():
+                        log(f"NODE: {line}")
+            except Exception as e:
+                log(f"Gagal ambil log Node.js: {e}")
+            sys.exit(1)
+
+        log("CDP ready! Starting muse_bot.py --one...")
+        bot_py = os.path.join(SCRIPTS, "muse_bot.py")
+        
+        bot_proc = subprocess.Popen(
+            [sys.executable, "-u", bot_py, "--one"], cwd=ROOT, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace",
+        )
+
+        for line in bot_proc.stdout:
+            print(line, end="", flush=True)
+
+        bot_proc.wait()
+        log(f"muse_bot exited with return code {bot_proc.returncode}")
+        if bot_proc.returncode != 0:
+            sys.exit(1)
+            
+    finally:
+        log("Cleaning up browser process...")
+        try:
+            browser_proc.terminate()
+            browser_proc.wait(timeout=5)
+        except Exception:
+            try: browser_proc.kill()
+            except: pass
+
+if __name__ == "__main__":
+    run_one(headless="--headed" not in sys.argv)
