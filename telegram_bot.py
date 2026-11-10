@@ -3,6 +3,8 @@ import subprocess
 import asyncio
 import re
 import html
+import csv
+import httpx
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from dotenv import load_dotenv
@@ -17,10 +19,88 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "🤖 <b>Muse.ai Farming Bot</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Bot akan otomatis menggunakan proxy acak dari <code>proxies.txt</code>.\n\n"
-        "Ketik /farm untuk mulai membuat akun Muse.ai."
+        "1. Ketik /farm untuk membuat akun baru secara otomatis.\n"
+        "2. Ketik /login email@domain.com untuk mengambil kode OTP saat login manual."
     )
     await update.message.reply_text(text, parse_mode="HTML")
+
+async def cmd_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Format: <code>/login email@domain.com</code>", parse_mode="HTML")
+        return
+    
+    email = context.args[0]
+    msg = await update.message.reply_text(f"⏳ Mencari data untuk <code>{email}</code>...", parse_mode="HTML")
+    
+    # 1. Cari password di accounts.csv
+    password = None
+    try:
+        with open('/app/accounts.csv', mode='r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row.get('email') == email or row.get('Email') == email:
+                    password = row.get('password') or row.get('Password') or row.get('pass')
+                    break
+    except Exception as e:
+        await msg.edit_text(f"❌ Gagal membaca database: <code>{html.escape(str(e))}</code>", parse_mode="HTML")
+        return
+
+    if not password:
+        await msg.edit_text("❌ Email tidak ditemukan di database bot. Pastikan email tersebut dibuat oleh bot ini.", parse_mode="HTML")
+        return
+        
+    await msg.edit_text("✅ Data ditemukan! Mengecek inbox email...", parse_mode="HTML")
+    
+    # 2. Buka inbox mail.tm
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            token_res = await client.post("https://api.mail.tm/token", json={"address": email, "password": password})
+            token = token_res.json().get("token")
+            if not token:
+                await msg.edit_text("❌ Gagal login ke server email. Sesi mungkin sudah expired.", parse_mode="HTML")
+                return
+            
+            msg_res = await client.get("https://api.mail.tm/messages", headers={"Authorization": f"Bearer {token}"})
+            messages = msg_res.json().get("hydra:member", [])
+            
+            if not messages:
+                await msg.edit_text("❌ Inbox kosong.\n\nSilakan buka web Muse.ai, klik 'Lupa Password' atau minta kode verifikasi, lalu ketik /login lagi.", parse_mode="HTML")
+                return
+                
+            # Ambil pesan terbaru
+            msg_id = messages[0]["id"]
+            detail_res = await client.get(f"https://api.mail.tm/messages/{msg_id}", headers={"Authorization": f"Bearer {token}"})
+            detail = detail_res.json()
+            
+            text = detail.get("text", "") or detail.get("html", "")
+                
+            # Cari kode 6 digit
+            otp_match = re.search(r'\b(\d{6})\b', text)
+            if otp_match:
+                otp = otp_match.group(1)
+                await msg.edit_text(
+                    f"🔑 <b>Kode Verifikasi Ditemukan!</b>\n\n"
+                    f"Kode: <code>{otp}</code>\n\n"
+                    f"Masukkan kode ini di web Muse.ai untuk login.", 
+                    parse_mode="HTML"
+                )
+            else:
+                # Cari link jika bukan OTP
+                link_match = re.search(r'https?://[^\s"\'<>]+', text)
+                if link_match:
+                    link = link_match.group(0).replace('&amp;', '&')
+                    await msg.edit_text(
+                        f"🔗 <b>Link Login Ditemukan!</b>\n\n"
+                        f"<a href='{link}'>Klik di sini untuk login</a>", 
+                        parse_mode="HTML", 
+                        disable_web_page_preview=True
+                    )
+                else:
+                    await msg.edit_text("❌ Email masuk, tapi kode verifikasi tidak ditemukan di dalamnya.", parse_mode="HTML")
+                    
+    except Exception as e:
+        await msg.edit_text(f"❌ Error: <code>{html.escape(str(e))}</code>", parse_mode="HTML")
+
 
 async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(
@@ -65,7 +145,6 @@ async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if current_time - last_update_time > 5 or is_important:
                 try:
-                    # Gunakan html.escape agar karakter aneh tidak bikin bot crash
                     display_logs = "\n".join([f"• {html.escape(l)}" for l in log_buffer[-3:]])
                     await msg.edit_text(
                         f"⏳ <b>Proses Farming...</b>\n\n<code>{display_logs}</code>", 
@@ -89,7 +168,7 @@ async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"✅ <b>Akun Muse.ai Berhasil Dibuat!</b>\n\n"
                 f"📧 <b>Email:</b> <code>{html.escape(email)}</code>\n"
                 f"🔑 <b>Password:</b> <code>{html.escape(password)}</code>\n\n"
-                f"<i>Gunakan kredensial di atas untuk login ke muse.ai</i>"
+                f"<i>Untuk login, buka web Muse.ai, masukkan email di atas, lalu ketik <code>/login {html.escape(email)}</code> di bot ini untuk mendapatkan kode OTP.</i>"
             )
             await msg.edit_text(success_msg, parse_mode="HTML")
         else:
@@ -111,6 +190,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("farm", farm))
+    app.add_handler(CommandHandler("login", cmd_login)) # Daftarkan command /login
     print("Bot Telegram berjalan...")
     app.run_polling(drop_pending_updates=True)
 
